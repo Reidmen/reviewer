@@ -2,18 +2,19 @@
 # ============================================================================
 #  test_pr_review.sh — Test suite for pr_review.sh
 # ============================================================================
-#  Tests ANSI colors, argument parsing, macOS compatibility, iTerm2 escape
-#  sequences, error handling, and helper function correctness.
+#  Tests ANSI colors, TTY/NO_COLOR detection, argument parsing, macOS
+#  compatibility, iTerm2 escape sequences, error handling, and helpers.
 #
 #  Usage:  ./test_pr_review.sh
 #  Exit:   0 = all pass, 1 = failures
 # ============================================================================
 set -uo pipefail
 
-# ── Test framework ─────────────────────────────────────────────────────────
+# ── Test framework (uses $'...' ANSI-C quoting — actual ESC bytes) ────────
 PASS=0; FAIL=0; TOTAL=0
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
-CYAN='\033[0;36m'; BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
+RED=$'\033[0;31m';    GREEN=$'\033[0;32m';  YELLOW=$'\033[1;33m'
+CYAN=$'\033[0;36m';   BOLD=$'\033[1m';      DIM=$'\033[2m';  RESET=$'\033[0m'
+ESC=$'\033'  # literal ESC byte for assertions
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="${SCRIPT_DIR}/pr_review.sh"
@@ -23,12 +24,12 @@ assert() {
     ((TOTAL++))
     if [[ "$result" == "$expected" ]]; then
         ((PASS++))
-        printf "  ${GREEN}PASS${RESET}  %s\n" "$desc"
+        printf "  %sPASS%s  %s\n" "$GREEN" "$RESET" "$desc"
     else
         ((FAIL++))
-        printf "  ${RED}FAIL${RESET}  %s\n" "$desc"
-        printf "        ${DIM}expected: %s${RESET}\n" "$expected"
-        printf "        ${DIM}     got: %s${RESET}\n" "$result"
+        printf "  %sFAIL%s  %s\n" "$RED" "$RESET" "$desc"
+        printf "        %sexpected: %s%s\n" "$DIM" "$expected" "$RESET"
+        printf "        %s     got: %s%s\n" "$DIM" "$result" "$RESET"
     fi
 }
 
@@ -37,12 +38,12 @@ assert_contains() {
     ((TOTAL++))
     if [[ "$haystack" == *"$needle"* ]]; then
         ((PASS++))
-        printf "  ${GREEN}PASS${RESET}  %s\n" "$desc"
+        printf "  %sPASS%s  %s\n" "$GREEN" "$RESET" "$desc"
     else
         ((FAIL++))
-        printf "  ${RED}FAIL${RESET}  %s\n" "$desc"
-        printf "        ${DIM}expected to contain: %s${RESET}\n" "$needle"
-        printf "        ${DIM}got: %.120s${RESET}\n" "$haystack"
+        printf "  %sFAIL%s  %s\n" "$RED" "$RESET" "$desc"
+        printf "        %sexpected to contain: %s%s\n" "$DIM" "$needle" "$RESET"
+        printf "        %sgot: %.120s%s\n" "$DIM" "$haystack" "$RESET"
     fi
 }
 
@@ -51,11 +52,11 @@ assert_not_contains() {
     ((TOTAL++))
     if [[ "$haystack" != *"$needle"* ]]; then
         ((PASS++))
-        printf "  ${GREEN}PASS${RESET}  %s\n" "$desc"
+        printf "  %sPASS%s  %s\n" "$GREEN" "$RESET" "$desc"
     else
         ((FAIL++))
-        printf "  ${RED}FAIL${RESET}  %s\n" "$desc"
-        printf "        ${DIM}should not contain: %s${RESET}\n" "$needle"
+        printf "  %sFAIL%s  %s\n" "$RED" "$RESET" "$desc"
+        printf "        %sshould not contain: %s%s\n" "$DIM" "$needle" "$RESET"
     fi
 }
 
@@ -64,55 +65,106 @@ assert_exit_code() {
     ((TOTAL++))
     if [[ "$actual" -eq "$expected" ]]; then
         ((PASS++))
-        printf "  ${GREEN}PASS${RESET}  %s\n" "$desc"
+        printf "  %sPASS%s  %s\n" "$GREEN" "$RESET" "$desc"
     else
         ((FAIL++))
-        printf "  ${RED}FAIL${RESET}  %s\n" "$desc"
-        printf "        ${DIM}expected exit: %s, got: %s${RESET}\n" "$expected" "$actual"
+        printf "  %sFAIL%s  %s\n" "$RED" "$RESET" "$desc"
+        printf "        %sexpected exit: %s, got: %s%s\n" "$DIM" "$expected" "$actual" "$RESET"
     fi
 }
 
 section() {
-    printf "\n${CYAN}${BOLD}▸ %s${RESET}\n" "$1"
+    printf "\n%s%s▸ %s%s\n" "$CYAN" "$BOLD" "$1" "$RESET"
 }
 
 # ── Pre-flight ─────────────────────────────────────────────────────────────
-printf "${BOLD}${CYAN}╔══════════════════════════════════════════════════╗${RESET}\n"
-printf "${BOLD}${CYAN}║  pr_review.sh — Test Suite                      ║${RESET}\n"
-printf "${BOLD}${CYAN}╚══════════════════════════════════════════════════╝${RESET}\n"
+printf "%s%s╔══════════════════════════════════════════════════╗%s\n" "$BOLD" "$CYAN" "$RESET"
+printf "%s%s║  pr_review.sh — Test Suite                      ║%s\n" "$BOLD" "$CYAN" "$RESET"
+printf "%s%s╚══════════════════════════════════════════════════╝%s\n" "$BOLD" "$CYAN" "$RESET"
 
 if [[ ! -f "$SCRIPT" ]]; then
-    printf "${RED}ERROR: pr_review.sh not found at %s${RESET}\n" "$SCRIPT"
+    printf "%sERROR: pr_review.sh not found at %s%s\n" "$RED" "$SCRIPT" "$RESET"
     exit 1
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  1. ANSI COLOR CODES
+#  1. ANSI COLOR CODES — $'...' quoting produces real ESC bytes
 # ═══════════════════════════════════════════════════════════════════════════
 section "ANSI Color Codes"
 
-# Extract color definitions from the script
-eval "$(grep -E "^(RED|GREEN|YELLOW|BLUE|CYAN|BOLD|DIM|RESET)=" "$SCRIPT" | head -3)"
+# Source color definitions from the script (lines with $'\033[...')
+eval "$(grep -E "^    (RED|GREEN|YELLOW|BLUE|CYAN|BOLD|DIM|RESET)=\\\$" "$SCRIPT" | sed 's/^    //')"
 
-# Verify each escape sequence is well-formed \033[...m
-for name in RED GREEN YELLOW BLUE CYAN BOLD DIM RESET; do
+# Verify each variable contains an actual ESC byte (0x1B) followed by [
+for name in RED GREEN YELLOW BLUE CYAN BOLD DIM; do
     val="${!name}"
-    if [[ "$val" =~ ^\\033\[[0-9]+(;[0-9]+)*m$ ]]; then
-        assert "Color $name is valid ANSI SGR" "valid" "valid"
+    if [[ "$val" == "${ESC}["* ]]; then
+        assert "Color $name starts with ESC[" "valid" "valid"
     else
-        assert "Color $name is valid ANSI SGR" "$val" "\\033[...m pattern"
+        assert "Color $name starts with ESC[" "$(printf '%s' "$val" | xxd -p | head -c10)" "1b5b..."
     fi
 done
 
-# Verify RESET clears all attributes
-assert "RESET is \\033[0m" "$RESET" '\033[0m'
+# Verify RESET is ESC[0m
+assert "RESET is ESC[0m" "$RESET" $'\033[0m'
 
-# Verify colors render (printf interprets them)
-rendered=$(printf "${GREEN}test${RESET}" 2>&1)
-assert_contains "GREEN renders (contains ESC)" "$rendered" "test"
+# Verify each color ends with 'm'
+for name in RED GREEN YELLOW BLUE CYAN BOLD DIM RESET; do
+    val="${!name}"
+    last_char="${val: -1}"
+    assert "Color $name ends with 'm'" "$last_char" "m"
+done
+
+# Verify colors produce visible output when printed
+rendered=$(printf "%stest%s" "$GREEN" "$RESET")
+assert_contains "GREEN renders visible text" "$rendered" "test"
+
+# Verify actual ESC byte is present in rendered output
+assert_contains "GREEN output contains ESC byte" "$rendered" "$ESC"
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  2. iTERM2 ESCAPE SEQUENCES
+#  2. TTY DETECTION & NO_COLOR SUPPORT
+# ═══════════════════════════════════════════════════════════════════════════
+section "TTY & NO_COLOR Detection"
+
+# Verify _use_color function exists
+assert_contains "Has _use_color() function" \
+    "$(grep '_use_color' "$SCRIPT")" "_use_color"
+
+# Verify NO_COLOR env var is checked (https://no-color.org)
+assert_contains "Checks NO_COLOR env var" \
+    "$(grep 'NO_COLOR' "$SCRIPT")" 'NO_COLOR'
+
+# Verify PR_REVIEW_NO_COLOR env var is checked
+assert_contains "Checks PR_REVIEW_NO_COLOR env var" \
+    "$(grep 'PR_REVIEW_NO_COLOR' "$SCRIPT")" 'PR_REVIEW_NO_COLOR'
+
+# Verify TTY check with -t 1
+assert_contains "Checks stdout is TTY (-t 1)" \
+    "$(grep '\-t 1' "$SCRIPT")" "-t 1"
+
+# Verify --no-color flag exists in parser
+assert_contains "Parser has --no-color flag" \
+    "$(grep 'no-color' "$SCRIPT")" "--no-color"
+
+# Verify --no-color sets empty color vars
+no_color_line=$(grep -A1 '\-\-no-color)' "$SCRIPT" | head -1)
+assert_contains "--no-color clears RED" "$no_color_line" "RED=''"
+
+# Verify colors disabled when piped (non-TTY)
+piped_output=$("$SCRIPT" --help 2>&1 | cat)
+assert_not_contains "No ESC bytes when piped" "$piped_output" "$ESC"
+
+# Verify NO_COLOR disables colors
+no_color_output=$(NO_COLOR=1 "$SCRIPT" --help 2>&1)
+assert_not_contains "NO_COLOR=1 suppresses ESC bytes" "$no_color_output" "$ESC"
+
+# Verify colors empty when NO_COLOR set (via fallback branch)
+assert_contains "Fallback sets empty color vars" \
+    "$(grep "RED=''.*GREEN=''" "$SCRIPT")" "RED=''"
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  3. iTERM2 ESCAPE SEQUENCES
 # ═══════════════════════════════════════════════════════════════════════════
 section "iTerm2 Escape Sequences"
 
@@ -136,7 +188,7 @@ assert_contains "Detects iTerm via LC_TERMINAL" \
     "$(grep 'LC_TERMINAL' "$SCRIPT")" "iTerm2"
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  3. ARGUMENT PARSING
+#  4. ARGUMENT PARSING
 # ═══════════════════════════════════════════════════════════════════════════
 section "Argument Parsing"
 
@@ -146,17 +198,17 @@ assert_exit_code "--help exits 0" "$exit_code" 0
 assert_contains "--help shows usage" "$output" "USAGE"
 assert_contains "--help shows options" "$output" "OPTIONS"
 
-# No args → fatal error
+# No args -> fatal error
 output=$("$SCRIPT" 2>&1) && exit_code=0 || exit_code=$?
 assert_exit_code "No args exits non-zero" "$exit_code" 1
 assert_contains "No args shows error" "$output" "Missing required argument"
 
-# Non-numeric PR number → fatal
+# Non-numeric PR number -> fatal
 output=$("$SCRIPT" abc 2>&1) && exit_code=0 || exit_code=$?
 assert_exit_code "Non-numeric PR number exits non-zero" "$exit_code" 1
 assert_contains "Non-numeric PR gives clear error" "$output" "Expected a PR number"
 
-# Unknown option → fatal
+# Unknown option -> fatal
 output=$("$SCRIPT" 42 --bogus 2>&1) && exit_code=0 || exit_code=$?
 assert_exit_code "Unknown option exits non-zero" "$exit_code" 1
 assert_contains "Unknown option named in error" "$output" "--bogus"
@@ -166,8 +218,12 @@ output=$("$SCRIPT" -h 2>&1) && exit_code=0 || exit_code=$?
 assert_exit_code "-h exits 0" "$exit_code" 0
 assert_contains "-h shows usage" "$output" "USAGE"
 
+# --no-color is accepted (does not error)
+output=$("$SCRIPT" --no-color --help 2>&1) && exit_code=0 || exit_code=$?
+assert_exit_code "--no-color --help exits 0" "$exit_code" 0
+
 # ═══════════════════════════════════════════════════════════════════════════
-#  4. macOS COMPATIBILITY
+#  5. macOS COMPATIBILITY
 # ═══════════════════════════════════════════════════════════════════════════
 section "macOS Compatibility"
 
@@ -187,18 +243,17 @@ assert_not_contains "No du -sb (macOS compat)" \
 assert_contains "Uses du -sk (macOS compatible)" \
     "$(grep 'du -sk' "$SCRIPT")" "du -sk"
 
-# Verify stat fallback chain (GNU → BSD → default)
+# Verify stat fallback chain (GNU -> BSD -> default)
 stat_line=$(grep 'stat -c' "$SCRIPT" || echo "")
 assert_contains "stat has BSD fallback (stat -f%z)" \
     "$stat_line" "stat -f%z"
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  5. SAFETY & SECURITY
+#  6. SAFETY & SECURITY
 # ═══════════════════════════════════════════════════════════════════════════
 section "Safety & Security"
 
 # Verify no raw eval on user-derived command strings (was a bug)
-# bg mode should use direct invocation, not eval
 bg_section=$(sed -n '/bg.*mode/,/exit 0/p' "$SCRIPT")
 assert_not_contains "No eval in bg mode (injection fix)" \
     "$bg_section" 'eval "$CMD"'
@@ -224,21 +279,27 @@ run_claude_line=$(grep -n 'run_claude()' "$SCRIPT")
 assert_contains "run_claude is a subshell" "$run_claude_line" "("
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  6. HELPER FUNCTIONS (sourced inline)
+#  7. HELPER FUNCTIONS — source color + function defs from script
 # ═══════════════════════════════════════════════════════════════════════════
 section "Helper Functions"
 
-# Test the logging functions by sourcing just the color/function defs
-eval "$(sed -n '53,62p' "$SCRIPT")"
+# Source the color setup and helper functions (skip _use_color detection
+# since we want colors enabled for testing)
+RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'; CYAN=$'\033[0;36m'; BOLD=$'\033[1m'
+DIM=$'\033[2m'; RESET=$'\033[0m'
+eval "$(grep -A1 '^info()\|^ok()\|^warn()\|^error()\|^fatal()\|^step()\|^_boxln()' "$SCRIPT" | grep -v '^--$')"
 
 # Capture info output
 info_out=$(info "test message" 2>&1)
 assert_contains "info() includes [INFO] tag" "$info_out" "[INFO]"
 assert_contains "info() includes the message" "$info_out" "test message"
+assert_contains "info() has ESC byte (colored)" "$info_out" "$ESC"
 
 # Capture ok output
 ok_out=$(ok "success" 2>&1)
 assert_contains "ok() includes [OK] tag" "$ok_out" "[OK]"
+assert_contains "ok() has ESC byte (colored)" "$ok_out" "$ESC"
 
 # Capture warn output
 warn_out=$(warn "careful" 2>&1)
@@ -252,8 +313,32 @@ assert_contains "error() includes [ERROR] tag" "$error_out" "[ERROR]"
 step_out=$(step "doing things" 2>&1)
 assert_contains "step() includes the message" "$step_out" "doing things"
 
+# _boxln() output
+boxln_out=$(_boxln "║ test box line ║" 2>&1)
+assert_contains "_boxln() contains the line" "$boxln_out" "test box line"
+assert_contains "_boxln() has ESC byte (colored)" "$boxln_out" "$ESC"
+
+# Verify logging with empty colors (NO_COLOR simulation)
+(
+    RED=''; GREEN=''; YELLOW=''; BLUE=''; CYAN=''; BOLD=''; DIM=''; RESET=''
+    eval "$(grep -A1 '^info()\|^ok()' "$SCRIPT" | grep -v '^--$')"
+    plain_info=$(info "plain" 2>&1)
+    plain_ok=$(ok "plain" 2>&1)
+    # Should still contain tags but no ESC bytes
+    if [[ "$plain_info" == *"[INFO]"* && "$plain_info" != *"$ESC"* ]]; then
+        echo "NOCOLOR_INFO_OK"
+    fi
+    if [[ "$plain_ok" == *"[OK]"* && "$plain_ok" != *"$ESC"* ]]; then
+        echo "NOCOLOR_OK_OK"
+    fi
+) | {
+    read -r line1; read -r line2
+    assert "info() works with empty colors" "$line1" "NOCOLOR_INFO_OK"
+    assert "ok() works with empty colors" "$line2" "NOCOLOR_OK_OK"
+}
+
 # ═══════════════════════════════════════════════════════════════════════════
-#  7. PREREQUISITE CHECKING
+#  8. PREREQUISITE CHECKING
 # ═══════════════════════════════════════════════════════════════════════════
 section "Prerequisites"
 
@@ -268,27 +353,35 @@ assert_contains "Checks gh auth status" \
     "$(grep 'gh auth status' "$SCRIPT")" "gh auth status"
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  8. COLOR RENDERING (visual — iTerm2 targeted)
+#  9. COLOR RENDERING — real ESC bytes in iTerm2
 # ═══════════════════════════════════════════════════════════════════════════
 section "Color Rendering (iTerm2)"
 
-# Verify all color sequences produce visible output (not empty)
+# Verify all colors produce visible output with ESC byte
 for name in RED GREEN YELLOW BLUE CYAN BOLD DIM; do
     val="${!name}"
-    rendered=$(printf "%b" "${val}X${RESET}")
+    rendered=$(printf "%sX%s" "$val" "$RESET")
     assert_contains "$name renders non-empty" "$rendered" "X"
+    assert_contains "$name contains ESC byte" "$rendered" "$ESC"
 done
 
-# Verify color reset actually removes formatting
-rendered=$(printf "%bcolored%bnormal" "$RED" "$RESET" | cat -v)
-assert_contains "RESET clears RED" "$rendered" "normal"
+# Verify RESET removes color (cat -v shows control chars)
+rendered=$(printf "%scolored%snormal" "$RED" "$RESET" | cat -v)
+assert_contains "RESET clears RED (cat -v shows [0m)" "$rendered" "[0m"
+assert_contains "Text after RESET is present" "$rendered" "normal"
 
 # Test box-drawing characters render (UTF-8)
 box_output=$(printf "╔══╗\n║  ║\n╚══╝\n")
 assert_contains "Box-drawing chars render" "$box_output" "╔══╗"
 
+# Verify no printf embeds color vars in format string
+bad_pattern_count=$(grep -cE 'printf "\$\{(BOLD|RED|GREEN|YELLOW|BLUE|CYAN|DIM|RESET)' "$SCRIPT" 2>/dev/null || true)
+bad_pattern_count="${bad_pattern_count:-0}"
+bad_pattern_count="$(echo "$bad_pattern_count" | tr -d '[:space:]')"
+assert "No color vars in printf format strings" "$bad_pattern_count" "0"
+
 # ═══════════════════════════════════════════════════════════════════════════
-#  9. WORKTREE & LOCKFILE LOGIC
+#  10. WORKTREE & LOCKFILE LOGIC
 # ═══════════════════════════════════════════════════════════════════════════
 section "Worktree & Lockfile Logic"
 
@@ -309,7 +402,7 @@ assert_contains "Has _sq() for safe quoting" \
     "$(grep '_sq()' "$SCRIPT")" "_sq()"
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  10. PARALLEL MODE
+#  11. PARALLEL MODE
 # ═══════════════════════════════════════════════════════════════════════════
 section "Parallel Mode"
 
@@ -333,17 +426,21 @@ assert_contains "PR diff command is pdiff (not diff)" \
 assert_not_contains "No diff() function (avoids shadow)" \
     "$(grep -w 'diff()' "$SCRIPT")" "diff()"
 
+# Verify _boxln helper exists
+assert_contains "Has _boxln() helper" \
+    "$(grep '_boxln()' "$SCRIPT")" "_boxln()"
+
 # ═══════════════════════════════════════════════════════════════════════════
 #  RESULTS
 # ═══════════════════════════════════════════════════════════════════════════
 echo ""
-printf "${BOLD}${CYAN}╔══════════════════════════════════════════════════╗${RESET}\n"
+printf "%s%s╔══════════════════════════════════════════════════╗%s\n" "$BOLD" "$CYAN" "$RESET"
 if [[ "$FAIL" -eq 0 ]]; then
-    printf "${BOLD}${GREEN}║  ALL %d TESTS PASSED                             ║${RESET}\n" "$TOTAL"
+    printf "%s%s║  ALL %d TESTS PASSED                             ║%s\n" "$BOLD" "$GREEN" "$TOTAL" "$RESET"
 else
-    printf "${BOLD}${RED}║  %d PASSED, %d FAILED (of %d)                    ║${RESET}\n" "$PASS" "$FAIL" "$TOTAL"
+    printf "%s%s║  %d PASSED, %d FAILED (of %d)                    ║%s\n" "$BOLD" "$RED" "$PASS" "$FAIL" "$TOTAL" "$RESET"
 fi
-printf "${BOLD}${CYAN}╚══════════════════════════════════════════════════╝${RESET}\n"
+printf "%s%s╚══════════════════════════════════════════════════╝%s\n" "$BOLD" "$CYAN" "$RESET"
 echo ""
 
 [[ "$FAIL" -eq 0 ]] && exit 0 || exit 1
