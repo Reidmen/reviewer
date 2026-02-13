@@ -64,19 +64,19 @@ _use_color() {
 # $'...' ANSI-C quoting: variables contain actual ESC bytes.
 # Works with printf %s, echo, and string concatenation — not just printf format.
 if _use_color; then
-    RED=$'\033[0;31m';    GREEN=$'\033[0;32m';  YELLOW=$'\033[1;33m'
-    BLUE=$'\033[0;34m';   CYAN=$'\033[0;36m';   BOLD=$'\033[1m'
+    RED=$'\033[1;31m';    GREEN=$'\033[0;32m';  YELLOW=$'\033[0;33m'
+    BLUE=$'\033[0;94m';   CYAN=$'\033[0;36m';   BOLD=$'\033[1m'
     DIM=$'\033[2m';       RESET=$'\033[0m'
 else
     RED=''; GREEN=''; YELLOW=''; BLUE=''; CYAN=''; BOLD=''; DIM=''; RESET=''
 fi
 
-info()  { printf "%s[INFO]%s  %b\n" "$BLUE" "$RESET" "$*"; }
-ok()    { printf "%s[OK]%s    %b\n" "$GREEN" "$RESET" "$*"; }
-warn()  { printf "%s[WARN]%s  %b\n" "$YELLOW" "$RESET" "$*"; }
-error() { printf "%s[ERROR]%s %b\n" "$RED" "$RESET" "$*" >&2; }
+info()  { printf "%s[INFO]%s  %s\n" "$BLUE" "$RESET" "$*"; }
+ok()    { printf "%s[OK]%s    %s\n" "$GREEN" "$RESET" "$*"; }
+warn()  { printf "%s[WARN]%s  %s\n" "$YELLOW" "$RESET" "$*"; }
+error() { printf "%s[ERROR]%s %s\n" "$RED" "$RESET" "$*" >&2; }
 fatal() { error "$@"; exit 1; }
-step()  { printf "\n%s%s▸ %b%s\n" "$CYAN" "$BOLD" "$*" "$RESET"; }
+step()  { printf "\n%s%s▸ %s%s\n" "$CYAN" "$BOLD" "$*" "$RESET"; }
 
 # Box-line helper: prints a single line wrapped in BOLD+CYAN, with RESET.
 _boxln() { printf "%s%s%s%s\n" "$BOLD" "$CYAN" "$1" "$RESET"; }
@@ -162,6 +162,9 @@ OPTIONS
   --no-skip-permissions      Require manual approval for each Claude tool
                               use (default is autonomous/skip-permissions).
 
+  --no-color                 Disable colored output. Also honored:
+                              NO_COLOR=1, PR_REVIEW_NO_COLOR=1
+
   --no-env-copy              Skip the automatic copying of .env and other
                               untracked config files into the worktree.
 
@@ -193,7 +196,7 @@ PARALLEL REVIEWS
 
   Each tab drops into a shell with quick commands:
     review   Re-display the review (opens in less for scrolling)
-    diff     View the full PR diff
+    pdiff    View the full PR diff
     files    Show PR metadata and changed file list
     exit     Close the tab
 
@@ -255,7 +258,7 @@ while [[ $# -gt 0 ]]; do
             fi ;;
     esac
 done
-[[ ${#PR_NUMBERS[@]} -eq 0 ]] && fatal "Missing required argument: PR number(s). Usage: $0 <PR_NUMBER...> [OPTIONS]"
+[[ ${#PR_NUMBERS[@]} -eq 0 ]] && fatal "Missing required argument: PR number(s). Usage: $(basename "$0") <PR_NUMBER...> [OPTIONS]"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -352,14 +355,14 @@ APPLESCRIPT
         done
 
         echo ""
-        _boxln "╔══════════════════════════════════════════════════════════════╗"
-        _boxln "║  ${#PR_NUMBERS[@]} reviews launched in iTerm2 tabs                         ║"
-        _boxln "║                                                              ║"
-        _boxln "║  Navigation:                                                 ║"
-        _boxln "║    ⌘ + ←/→         Switch between tabs                      ║"
-        _boxln "║    ⌘ + 1-9          Jump to tab by number                    ║"
-        _boxln "║    ⌘ + Shift + ]    Next tab                                 ║"
-        _boxln "╚══════════════════════════════════════════════════════════════╝"
+        _boxln "╔════════════════════════════════════════════════════════════╗"
+        printf "%s%s║  %-57s║%s\n" "$BOLD" "$CYAN" "${#PR_NUMBERS[@]} reviews launched in iTerm2 tabs" "$RESET"
+        _boxln "║                                                            ║"
+        _boxln "║  Navigation:                                               ║"
+        _boxln "║    ⌘ + ←/→           Switch between tabs                   ║"
+        _boxln "║    ⌘ + 1-9           Jump to tab by number                 ║"
+        _boxln "║    ⌘ + Shift + ]     Next tab                              ║"
+        _boxln "╚════════════════════════════════════════════════════════════╝"
         echo ""
         for i in "${!PR_NUMBERS[@]}"; do
             printf "  Tab %d: %sPR #%s%s — %s\n" "$((i+1))" "$BOLD" "${PR_NUMBERS[$i]}" "$RESET" "${PR_TITLES[${PR_NUMBERS[$i]}]}"
@@ -392,15 +395,15 @@ APPLESCRIPT
         done
 
         echo ""
-        _boxln "╔══════════════════════════════════════════════════════════════╗"
-        printf "%s%s║  %s reviews launched in tmux session: %-22s ║%s\n" "$BOLD" "$CYAN" "${#PR_NUMBERS[@]}" "$SESSION_NAME" "$RESET"
-        _boxln "║                                                              ║"
-        _boxln "║  Navigation:                                                 ║"
-        _boxln "║    Ctrl+B  n        Next window                              ║"
-        _boxln "║    Ctrl+B  p        Previous window                          ║"
-        _boxln "║    Ctrl+B  0-9      Jump to window by number                 ║"
-        _boxln "║    Ctrl+B  w        Interactive window picker                 ║"
-        _boxln "╚══════════════════════════════════════════════════════════════╝"
+        _boxln "╔════════════════════════════════════════════════════════════╗"
+        printf "%s%s║  %-57s║%s\n" "$BOLD" "$CYAN" "${#PR_NUMBERS[@]} reviews in tmux: ${SESSION_NAME}" "$RESET"
+        _boxln "║                                                            ║"
+        _boxln "║  Navigation:                                               ║"
+        _boxln "║    Ctrl+B  n         Next window                           ║"
+        _boxln "║    Ctrl+B  p         Previous window                       ║"
+        _boxln "║    Ctrl+B  0-9       Jump to window by number              ║"
+        _boxln "║    Ctrl+B  w         Interactive window picker             ║"
+        _boxln "╚════════════════════════════════════════════════════════════╝"
         echo ""
         for i in "${!PR_NUMBERS[@]}"; do
             printf "  Window %d: %sPR #%s%s — %s\n" "$i" "$BOLD" "${PR_NUMBERS[$i]}" "$RESET" "${PR_TITLES[${PR_NUMBERS[$i]}]}"
@@ -435,11 +438,11 @@ APPLESCRIPT
         done
 
         echo ""
-        _boxln "╔══════════════════════════════════════════════════════════════╗"
-        _boxln "║  ${#PR_NUMBERS[@]} reviews running in background                          ║"
-        _boxln "║                                                              ║"
-        _boxln "║  Tip: install iTerm2 or tmux for tabbed parallel reviews     ║"
-        _boxln "╚══════════════════════════════════════════════════════════════╝"
+        _boxln "╔════════════════════════════════════════════════════════════╗"
+        printf "%s%s║  %-57s║%s\n" "$BOLD" "$CYAN" "${#PR_NUMBERS[@]} reviews running in background" "$RESET"
+        _boxln "║                                                            ║"
+        _boxln "║  Tip: install iTerm2 or tmux for tabbed parallel reviews   ║"
+        _boxln "╚════════════════════════════════════════════════════════════╝"
         echo ""
 
         # Live status watcher
@@ -606,18 +609,18 @@ WT_RELPATH=$(python3 -c "import os.path; print(os.path.relpath('$WORKTREE_PARENT
 if [[ -n "$WT_RELPATH" && "$WT_RELPATH" != ..* ]]; then
     IGNORE_ENTRY="/${WT_RELPATH}/"
     if git -C "$GIT_ROOT" check-ignore -q "${WT_RELPATH}/test" 2>/dev/null; then
-        ok "Already git-ignored: '${WT_RELPATH}/'"
+        : # already git-ignored
     else
         GIT_EXCLUDE="${GIT_ROOT}/.git/info/exclude"
         if [[ -f "$GIT_EXCLUDE" ]]; then
             if ! grep -qF "$IGNORE_ENTRY" "$GIT_EXCLUDE" 2>/dev/null; then
                 printf '\n# PR review worktrees (auto-added by pr-review.sh)\n%s\n' "$IGNORE_ENTRY" >> "$GIT_EXCLUDE"
-                ok "Added '${IGNORE_ENTRY}' to .git/info/exclude"
+                printf "       %sAdded worktree to git exclude%s\n" "$DIM" "$RESET"
             fi
         else
             mkdir -p "$(dirname "$GIT_EXCLUDE")"
             printf '# PR review worktrees (auto-added by pr-review.sh)\n%s\n' "$IGNORE_ENTRY" > "$GIT_EXCLUDE"
-            ok "Created .git/info/exclude with '${IGNORE_ENTRY}'"
+            printf "       %sAdded worktree to git exclude%s\n" "$DIM" "$RESET"
         fi
         GITIGNORE_FILE="${GIT_ROOT}/.gitignore"
         if [[ -f "$GITIGNORE_FILE" ]]; then
@@ -685,7 +688,7 @@ git -C "$GIT_ROOT" worktree add "$WORKTREE_DIR" "$WORKTREE_BRANCH" 2>/dev/null \
     || fatal "Failed to create worktree at $WORKTREE_DIR"
 
 ok "Worktree created: $WORKTREE_DIR"
-ok "Branch: $WORKTREE_BRANCH (isolated — no interference with existing branches)"
+ok "Branch: $WORKTREE_BRANCH"
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  ENVIRONMENT / CONFIG FILE COPYING
@@ -922,10 +925,10 @@ fi
 
 # ── Execute ────────────────────────────────────────────────────────────────
 echo ""
-_boxln "╔══════════════════════════════════════════════════════╗"
-printf "%s%s║  Starting PR Review: #%-6s                        ║%s\n" "$BOLD" "$CYAN" "$PR_NUMBER" "$RESET"
-printf "%s%s║  %-52s ║%s\n" "$BOLD" "$CYAN" "$(echo "$PR_TITLE" | cut -c1-52)" "$RESET"
-_boxln "╚══════════════════════════════════════════════════════╝"
+_boxln "╔════════════════════════════════════════════════════════════╗"
+printf "%s%s║  %-57s║%s\n" "$BOLD" "$CYAN" "Starting PR Review: #${PR_NUMBER}" "$RESET"
+printf "%s%s║  %-57s║%s\n" "$BOLD" "$CYAN" "$(echo "$PR_TITLE" | cut -c1-57)" "$RESET"
+_boxln "╚════════════════════════════════════════════════════════════╝"
 echo ""
 
 _set_tab_title "PR #${PR_NUMBER} ⟳ reviewing..."
@@ -942,7 +945,16 @@ run_claude() (
 
 if [[ -n "$OUTPUT_FILE" ]]; then
     info "Claude is reviewing the PR (non-interactive)..."
-    run_claude > "$OUTPUT_FILE" 2>&1 && REVIEW_EXIT=0 || REVIEW_EXIT=$?
+    CLAUDE_START=$SECONDS
+    run_claude > "$OUTPUT_FILE" 2>&1 &
+    CLAUDE_PID=$!
+    while kill -0 "$CLAUDE_PID" 2>/dev/null; do
+        ELAPSED=$(( SECONDS - CLAUDE_START ))
+        printf "\r%s[INFO]%s  Reviewing... %dm %02ds elapsed" "$BLUE" "$RESET" "$((ELAPSED/60))" "$((ELAPSED%60))"
+        sleep 5
+    done
+    wait "$CLAUDE_PID" && REVIEW_EXIT=0 || REVIEW_EXIT=$?
+    printf "\r\033[K"  # clear timer line
 else
     run_claude && REVIEW_EXIT=0 || REVIEW_EXIT=$?
 fi
@@ -971,11 +983,11 @@ _show_review() {
 
     printf "%s%s%s%s\n" "$BOLD" "$CYAN" "$sep" "$RESET"
     if [[ $REVIEW_EXIT -eq 0 ]]; then
-        printf "%s%s  ✓ REVIEW: PR #%s%s%s — %s%s\n" "$BOLD" "$GREEN" "$PR_NUMBER" "$RESET" "$BOLD" "$(echo "$PR_TITLE" | cut -c1-$((cols - 28)))" "$RESET"
+        printf "%s%s  ✓ REVIEW: PR #%s — %s%s\n" "$BOLD" "$GREEN" "$PR_NUMBER" "$(echo "$PR_TITLE" | cut -c1-$((cols - 28)))" "$RESET"
     else
-        printf "%s%s  ✗ REVIEW: PR #%s%s%s — %s  (Claude exit %s)%s\n" "$BOLD" "$RED" "$PR_NUMBER" "$RESET" "$BOLD" "$(echo "$PR_TITLE" | cut -c1-$((cols - 40)))" "$REVIEW_EXIT" "$RESET"
+        printf "%s%s  ✗ REVIEW: PR #%s — %s  (Claude exit %s)%s\n" "$BOLD" "$RED" "$PR_NUMBER" "$(echo "$PR_TITLE" | cut -c1-$((cols - 40)))" "$REVIEW_EXIT" "$RESET"
     fi
-    printf "%s  @%-12s  %s → %s%s\n" "$DIM" "$PR_AUTHOR" "$PR_HEAD" "$PR_BASE" "$RESET"
+    printf "%s  @%-16s  %s → %s%s\n" "$DIM" "$PR_AUTHOR" "$PR_HEAD" "$PR_BASE" "$RESET"
     printf "%s  %s%s\n" "$DIM" "$PR_URL" "$RESET"
     printf "%s%s%s%s\n" "$BOLD" "$CYAN" "$sep" "$RESET"
     echo ""

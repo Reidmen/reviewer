@@ -2,23 +2,31 @@
 # ============================================================================
 #  test_pr_review.sh — Test suite for pr_review.sh
 # ============================================================================
-#  Tests ANSI colors, TTY/NO_COLOR detection, argument parsing, macOS
-#  compatibility, iTerm2 escape sequences, error handling, and helpers.
+#  Covers: ANSI colors, TTY/NO_COLOR detection, argument parsing, edge cases,
+#  macOS compatibility, iTerm2 escapes, safety, helpers, rendering, worktree
+#  logic, parallel mode, behavioral tests, and integration with mocks.
 #
-#  Usage:  ./test_pr_review.sh
+#  Usage:  ./test_pr_review.sh [FILTER]
 #  Exit:   0 = all pass, 1 = failures
+#
+#  Filter: ./test_pr_review.sh "Edge"     # run only sections matching "Edge"
 # ============================================================================
 set -uo pipefail
 
-# ── Test framework (uses $'...' ANSI-C quoting — actual ESC bytes) ────────
-PASS=0; FAIL=0; TOTAL=0
-RED=$'\033[0;31m';    GREEN=$'\033[0;32m';  YELLOW=$'\033[1;33m'
+# ── Test framework ─────────────────────────────────────────────────────────
+PASS=0; FAIL=0; SKIP=0; TOTAL=0
+TEST_START=$SECONDS
+FILTER="${1:-}"
+
+RED=$'\033[1;31m';    GREEN=$'\033[0;32m';  YELLOW=$'\033[0;33m'
 CYAN=$'\033[0;36m';   BOLD=$'\033[1m';      DIM=$'\033[2m';  RESET=$'\033[0m'
-ESC=$'\033'  # literal ESC byte for assertions
+ESC=$'\033'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT="${SCRIPT_DIR}/pr_review.sh"
+TEST_TMP=""
 
+# ── Assertions ─────────────────────────────────────────────────────────────
 assert() {
     local desc="$1" result="$2" expected="$3"
     ((TOTAL++))
@@ -43,7 +51,7 @@ assert_contains() {
         ((FAIL++))
         printf "  %sFAIL%s  %s\n" "$RED" "$RESET" "$desc"
         printf "        %sexpected to contain: %s%s\n" "$DIM" "$needle" "$RESET"
-        printf "        %sgot: %.120s%s\n" "$DIM" "$haystack" "$RESET"
+        printf "        %sgot: %.200s%s\n" "$DIM" "$haystack" "$RESET"
     fi
 }
 
@@ -73,14 +81,54 @@ assert_exit_code() {
     fi
 }
 
+assert_file_exists() {
+    local desc="$1" path="$2"
+    ((TOTAL++))
+    if [[ -e "$path" ]]; then
+        ((PASS++))
+        printf "  %sPASS%s  %s\n" "$GREEN" "$RESET" "$desc"
+    else
+        ((FAIL++))
+        printf "  %sFAIL%s  %s\n" "$RED" "$RESET" "$desc"
+        printf "        %sfile not found: %s%s\n" "$DIM" "$path" "$RESET"
+    fi
+}
+
+skip() {
+    local desc="$1" reason="$2"
+    ((TOTAL++)); ((SKIP++))
+    printf "  %sSKIP%s  %s %s(%s)%s\n" "$YELLOW" "$RESET" "$desc" "$DIM" "$reason" "$RESET"
+}
+
+_section_active=true
 section() {
+    if [[ -n "$FILTER" && "$1" != *"$FILTER"* ]]; then
+        _section_active=false
+        return 1
+    fi
+    _section_active=true
     printf "\n%s%s▸ %s%s\n" "$CYAN" "$BOLD" "$1" "$RESET"
 }
 
+# ── Test fixtures ──────────────────────────────────────────────────────────
+setup_tmp() {
+    TEST_TMP=$(mktemp -d /tmp/pr-review-test-XXXXXX)
+}
+
+cleanup_tmp() {
+    [[ -n "$TEST_TMP" && -d "$TEST_TMP" ]] && rm -rf "$TEST_TMP"
+    TEST_TMP=""
+}
+
+trap 'cleanup_tmp' EXIT
+
 # ── Pre-flight ─────────────────────────────────────────────────────────────
-printf "%s%s╔══════════════════════════════════════════════════╗%s\n" "$BOLD" "$CYAN" "$RESET"
-printf "%s%s║  pr_review.sh — Test Suite                      ║%s\n" "$BOLD" "$CYAN" "$RESET"
-printf "%s%s╚══════════════════════════════════════════════════╝%s\n" "$BOLD" "$CYAN" "$RESET"
+printf "%s%s╔════════════════════════════════════════════════════════════╗%s\n" "$BOLD" "$CYAN" "$RESET"
+printf "%s%s║  pr_review.sh — Test Suite                                ║%s\n" "$BOLD" "$CYAN" "$RESET"
+if [[ -n "$FILTER" ]]; then
+    printf "%s%s║  %-57s║%s\n" "$BOLD" "$CYAN" "Filter: $FILTER" "$RESET"
+fi
+printf "%s%s╚════════════════════════════════════════════════════════════╝%s\n" "$BOLD" "$CYAN" "$RESET"
 
 if [[ ! -f "$SCRIPT" ]]; then
     printf "%sERROR: pr_review.sh not found at %s%s\n" "$RED" "$SCRIPT" "$RESET"
@@ -88,359 +136,511 @@ if [[ ! -f "$SCRIPT" ]]; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  1. ANSI COLOR CODES — $'...' quoting produces real ESC bytes
+#  1. ANSI COLOR CODES
 # ═══════════════════════════════════════════════════════════════════════════
-section "ANSI Color Codes"
+if section "ANSI Color Codes"; then
+    # Source color defs in subshell to avoid polluting test env
+    color_test_results=$(
+        eval "$(grep -E "^[[:space:]]*(RED|GREEN|YELLOW|BLUE|CYAN|BOLD|DIM|RESET)=\\\$" "$SCRIPT" | sed 's/^[[:space:]]*//')"
+        ESC=$'\033'
+        for name in RED GREEN YELLOW BLUE CYAN BOLD DIM; do
+            val="${!name}"
+            [[ "$val" == "${ESC}["* ]] && echo "ESC_OK:$name" || echo "ESC_FAIL:$name"
+            [[ "${val: -1}" == "m" ]] && echo "M_OK:$name" || echo "M_FAIL:$name"
+        done
+        [[ "$RESET" == $'\033[0m' ]] && echo "RESET_OK" || echo "RESET_FAIL"
+        printf "%stest%s" "$GREEN" "$RESET" | grep -q "$ESC" && echo "RENDER_OK" || echo "RENDER_FAIL"
+    )
 
-# Source color definitions from the script (lines with $'\033[...')
-eval "$(grep -E "^    (RED|GREEN|YELLOW|BLUE|CYAN|BOLD|DIM|RESET)=\\\$" "$SCRIPT" | sed 's/^    //')"
+    for name in RED GREEN YELLOW BLUE CYAN BOLD DIM; do
+        assert "Color $name starts with ESC[" \
+            "$(echo "$color_test_results" | grep "ESC_.*:$name" | cut -d: -f1)" "ESC_OK"
+        assert "Color $name ends with 'm'" \
+            "$(echo "$color_test_results" | grep "M_.*:$name" | cut -d: -f1)" "M_OK"
+    done
+    assert "RESET is ESC[0m" \
+        "$(echo "$color_test_results" | grep RESET)" "RESET_OK"
+    assert "GREEN renders with ESC byte" \
+        "$(echo "$color_test_results" | grep RENDER)" "RENDER_OK"
 
-# Verify each variable contains an actual ESC byte (0x1B) followed by [
-for name in RED GREEN YELLOW BLUE CYAN BOLD DIM; do
-    val="${!name}"
-    if [[ "$val" == "${ESC}["* ]]; then
-        assert "Color $name starts with ESC[" "valid" "valid"
-    else
-        assert "Color $name starts with ESC[" "$(printf '%s' "$val" | xxd -p | head -c10)" "1b5b..."
-    fi
-done
+    # Verify RED is bold (errors should outweigh warnings)
+    red_def=$(grep -E "^[[:space:]]*RED=" "$SCRIPT" | head -1)
+    assert_contains "RED is bold (1;31m)" "$red_def" "1;31m"
 
-# Verify RESET is ESC[0m
-assert "RESET is ESC[0m" "$RESET" $'\033[0m'
+    # Verify YELLOW is non-bold (warnings lighter than errors)
+    yellow_def=$(grep 'YELLOW=' "$SCRIPT" | grep -v "^#" | head -1)
+    assert_contains "YELLOW is non-bold (0;33m)" "$yellow_def" "0;33m"
 
-# Verify each color ends with 'm'
-for name in RED GREEN YELLOW BLUE CYAN BOLD DIM RESET; do
-    val="${!name}"
-    last_char="${val: -1}"
-    assert "Color $name ends with 'm'" "$last_char" "m"
-done
-
-# Verify colors produce visible output when printed
-rendered=$(printf "%stest%s" "$GREEN" "$RESET")
-assert_contains "GREEN renders visible text" "$rendered" "test"
-
-# Verify actual ESC byte is present in rendered output
-assert_contains "GREEN output contains ESC byte" "$rendered" "$ESC"
+    # Verify BLUE uses bright variant (readable on dark backgrounds)
+    blue_def=$(grep 'BLUE=' "$SCRIPT" | grep -v "^#" | head -1)
+    assert_contains "BLUE is bright (94m)" "$blue_def" "94m"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  2. TTY DETECTION & NO_COLOR SUPPORT
+#  2. TTY & NO_COLOR DETECTION (behavioral)
 # ═══════════════════════════════════════════════════════════════════════════
-section "TTY & NO_COLOR Detection"
+if section "TTY & NO_COLOR Detection"; then
+    # Behavioral: piped output has no ESC bytes
+    piped_output=$("$SCRIPT" --help 2>&1 | cat)
+    assert_not_contains "Piped output has no ESC bytes" "$piped_output" "$ESC"
 
-# Verify _use_color function exists
-assert_contains "Has _use_color() function" \
-    "$(grep '_use_color' "$SCRIPT")" "_use_color"
+    # Behavioral: NO_COLOR=1 disables all colors
+    no_color_output=$(NO_COLOR=1 "$SCRIPT" --help 2>&1)
+    assert_not_contains "NO_COLOR=1 suppresses colors" "$no_color_output" "$ESC"
 
-# Verify NO_COLOR env var is checked (https://no-color.org)
-assert_contains "Checks NO_COLOR env var" \
-    "$(grep 'NO_COLOR' "$SCRIPT")" 'NO_COLOR'
+    # Behavioral: PR_REVIEW_NO_COLOR=1 also works
+    pr_no_color_output=$(PR_REVIEW_NO_COLOR=1 "$SCRIPT" --help 2>&1)
+    assert_not_contains "PR_REVIEW_NO_COLOR=1 suppresses colors" "$pr_no_color_output" "$ESC"
 
-# Verify PR_REVIEW_NO_COLOR env var is checked
-assert_contains "Checks PR_REVIEW_NO_COLOR env var" \
-    "$(grep 'PR_REVIEW_NO_COLOR' "$SCRIPT")" 'PR_REVIEW_NO_COLOR'
+    # Behavioral: --no-color flag disables colors
+    flag_output=$("$SCRIPT" --no-color --help 2>&1)
+    assert_not_contains "--no-color flag suppresses colors" "$flag_output" "$ESC"
 
-# Verify TTY check with -t 1
-assert_contains "Checks stdout is TTY (-t 1)" \
-    "$(grep '\-t 1' "$SCRIPT")" "-t 1"
+    # Behavioral: help text is still readable without colors
+    assert_contains "Help text present without colors" "$piped_output" "USAGE"
+    assert_contains "Options present without colors" "$piped_output" "OPTIONS"
 
-# Verify --no-color flag exists in parser
-assert_contains "Parser has --no-color flag" \
-    "$(grep 'no-color' "$SCRIPT")" "--no-color"
-
-# Verify --no-color sets empty color vars
-no_color_line=$(grep -A1 '\-\-no-color)' "$SCRIPT" | head -1)
-assert_contains "--no-color clears RED" "$no_color_line" "RED=''"
-
-# Verify colors disabled when piped (non-TTY)
-piped_output=$("$SCRIPT" --help 2>&1 | cat)
-assert_not_contains "No ESC bytes when piped" "$piped_output" "$ESC"
-
-# Verify NO_COLOR disables colors
-no_color_output=$(NO_COLOR=1 "$SCRIPT" --help 2>&1)
-assert_not_contains "NO_COLOR=1 suppresses ESC bytes" "$no_color_output" "$ESC"
-
-# Verify colors empty when NO_COLOR set (via fallback branch)
-assert_contains "Fallback sets empty color vars" \
-    "$(grep "RED=''.*GREEN=''" "$SCRIPT")" "RED=''"
+    # Structural: _use_color checks TTY
+    assert_contains "Checks stdout TTY (-t 1)" "$(grep '\-t 1' "$SCRIPT")" "-t 1"
+    assert_contains "Checks stderr TTY (-t 2)" "$(grep '\-t 2' "$SCRIPT")" "-t 2"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  3. iTERM2 ESCAPE SEQUENCES
 # ═══════════════════════════════════════════════════════════════════════════
-section "iTerm2 Escape Sequences"
+if section "iTerm2 Escape Sequences"; then
+    tab_title_output=$(printf '\e]1;%s\a' "Test Title" | cat -v)
+    assert_contains "OSC 1 sets tab title" "$tab_title_output" "^[]1;Test Title"
 
-# Tab title: \e]1;TITLE\a
-tab_title_output=$(printf '\e]1;%s\a' "Test Title" | cat -v)
-assert_contains "Tab title uses OSC 1 (ESC ]1;)" "$tab_title_output" "^[]1;Test Title"
+    win_title_output=$(printf '\e]0;%s\a' "Win Title" | cat -v)
+    assert_contains "OSC 0 sets window title" "$win_title_output" "^[]0;Win Title"
 
-# Window title: \e]0;TITLE\a
-win_title_output=$(printf '\e]0;%s\a' "Win Title" | cat -v)
-assert_contains "Window title uses OSC 0 (ESC ]0;)" "$win_title_output" "^[]0;Win Title"
+    assert_contains "Detects iTerm via TERM_PROGRAM" \
+        "$(grep 'TERM_PROGRAM' "$SCRIPT")" "iTerm.app"
+    assert_contains "Detects iTerm via LC_TERMINAL" \
+        "$(grep 'LC_TERMINAL' "$SCRIPT")" "iTerm2"
 
-# Verify _set_tab_title function exists in script
-assert_contains "Script has _set_tab_title function" "$(grep -c '_set_tab_title' "$SCRIPT")" ""
-
-# Verify iTerm2 detection checks TERM_PROGRAM
-assert_contains "Detects iTerm via TERM_PROGRAM" \
-    "$(grep 'TERM_PROGRAM' "$SCRIPT")" "iTerm.app"
-
-# Verify iTerm2 detection checks LC_TERMINAL
-assert_contains "Detects iTerm via LC_TERMINAL" \
-    "$(grep 'LC_TERMINAL' "$SCRIPT")" "iTerm2"
+    # Verify AppleScript sanitizes tab titles
+    assert_contains "AppleScript escapes double quotes" \
+        "$(grep -A1 'TAB_TITLE=' "$SCRIPT" | grep 'escape')" "escape double quotes"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  4. ARGUMENT PARSING
 # ═══════════════════════════════════════════════════════════════════════════
-section "Argument Parsing"
+if section "Argument Parsing"; then
+    output=$("$SCRIPT" --help 2>&1) && exit_code=0 || exit_code=$?
+    assert_exit_code "--help exits 0" "$exit_code" 0
+    assert_contains "--help shows USAGE" "$output" "USAGE"
+    assert_contains "--help shows OPTIONS" "$output" "OPTIONS"
+    assert_contains "--help shows EXAMPLES" "$output" "EXAMPLES"
 
-# --help exits 0
-output=$("$SCRIPT" --help 2>&1) && exit_code=0 || exit_code=$?
-assert_exit_code "--help exits 0" "$exit_code" 0
-assert_contains "--help shows usage" "$output" "USAGE"
-assert_contains "--help shows options" "$output" "OPTIONS"
+    output=$("$SCRIPT" -h 2>&1) && exit_code=0 || exit_code=$?
+    assert_exit_code "-h exits 0" "$exit_code" 0
 
-# No args -> fatal error
-output=$("$SCRIPT" 2>&1) && exit_code=0 || exit_code=$?
-assert_exit_code "No args exits non-zero" "$exit_code" 1
-assert_contains "No args shows error" "$output" "Missing required argument"
+    output=$("$SCRIPT" 2>&1) && exit_code=0 || exit_code=$?
+    assert_exit_code "No args exits 1" "$exit_code" 1
+    assert_contains "No args shows error" "$output" "Missing required argument"
 
-# Non-numeric PR number -> fatal
-output=$("$SCRIPT" abc 2>&1) && exit_code=0 || exit_code=$?
-assert_exit_code "Non-numeric PR number exits non-zero" "$exit_code" 1
-assert_contains "Non-numeric PR gives clear error" "$output" "Expected a PR number"
+    output=$("$SCRIPT" abc 2>&1) && exit_code=0 || exit_code=$?
+    assert_exit_code "Non-numeric PR exits 1" "$exit_code" 1
+    assert_contains "Non-numeric error is clear" "$output" "Expected a PR number"
 
-# Unknown option -> fatal
-output=$("$SCRIPT" 42 --bogus 2>&1) && exit_code=0 || exit_code=$?
-assert_exit_code "Unknown option exits non-zero" "$exit_code" 1
-assert_contains "Unknown option named in error" "$output" "--bogus"
+    output=$("$SCRIPT" 42 --bogus 2>&1) && exit_code=0 || exit_code=$?
+    assert_exit_code "Unknown option exits 1" "$exit_code" 1
+    assert_contains "Unknown option named" "$output" "--bogus"
 
-# -h is alias for --help
-output=$("$SCRIPT" -h 2>&1) && exit_code=0 || exit_code=$?
-assert_exit_code "-h exits 0" "$exit_code" 0
-assert_contains "-h shows usage" "$output" "USAGE"
+    output=$("$SCRIPT" --no-color --help 2>&1) && exit_code=0 || exit_code=$?
+    assert_exit_code "--no-color accepted" "$exit_code" 0
 
-# --no-color is accepted (does not error)
-output=$("$SCRIPT" --no-color --help 2>&1) && exit_code=0 || exit_code=$?
-assert_exit_code "--no-color --help exits 0" "$exit_code" 0
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  5. macOS COMPATIBILITY
-# ═══════════════════════════════════════════════════════════════════════════
-section "macOS Compatibility"
-
-# Verify script does NOT use `realpath --relative-to` (was a bug)
-assert_not_contains "No realpath --relative-to (macOS compat)" \
-    "$(grep 'realpath' "$SCRIPT")" "realpath --relative-to"
-
-# Verify python3 fallback for relative path
-assert_contains "Uses python3 for relative path" \
-    "$(grep 'python3.*relpath' "$SCRIPT")" "os.path.relpath"
-
-# Verify script does NOT use `du -sb` (was a bug)
-assert_not_contains "No du -sb (macOS compat)" \
-    "$(grep 'du -s' "$SCRIPT")" "du -sb"
-
-# Verify du -sk is used instead
-assert_contains "Uses du -sk (macOS compatible)" \
-    "$(grep 'du -sk' "$SCRIPT")" "du -sk"
-
-# Verify stat fallback chain (GNU -> BSD -> default)
-stat_line=$(grep 'stat -c' "$SCRIPT" || echo "")
-assert_contains "stat has BSD fallback (stat -f%z)" \
-    "$stat_line" "stat -f%z"
+    # Verify all documented flags appear in help
+    for flag in --repo --dir --env-files --model --max-turns --output --cleanup \
+                --no-teams --no-skip-permissions --no-env-copy --no-color --tabs; do
+        assert_contains "Help mentions $flag" "$output" "$flag"
+    done
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  6. SAFETY & SECURITY
+#  5. ARGUMENT EDGE CASES (behavioral)
 # ═══════════════════════════════════════════════════════════════════════════
-section "Safety & Security"
+if section "Argument Edge Cases"; then
+    # Negative number looks like an option
+    output=$("$SCRIPT" -- -42 2>&1) && exit_code=0 || exit_code=$?
+    # May fail as unknown option or non-numeric — either way, not a crash
+    assert "Negative PR doesn't crash (exits non-zero)" "$(( exit_code != 0 ? 1 : 0 ))" "1"
 
-# Verify no raw eval on user-derived command strings (was a bug)
-bg_section=$(sed -n '/bg.*mode/,/exit 0/p' "$SCRIPT")
-assert_not_contains "No eval in bg mode (injection fix)" \
-    "$bg_section" 'eval "$CMD"'
+    # Very large PR number (handled gracefully, no overflow)
+    output=$("$SCRIPT" 99999999999 2>&1) && exit_code=0 || exit_code=$?
+    # Should proceed to prerequisite check (gh/git/claude), not crash on parsing
+    # Exit 1 is expected because we're not in a valid context to review
+    assert "Huge PR number doesn't crash" "$(( exit_code <= 128 ? 1 : 0 ))" "1"
 
-# Verify build_cmd uses printf %q for safe quoting
-build_cmd_section=$(sed -n '/build_cmd/,/^    }/p' "$SCRIPT")
-assert_contains "build_cmd uses printf %q" "$build_cmd_section" "printf '%q"
+    # Zero is a valid number syntactically
+    output=$("$SCRIPT" 0 2>&1) && exit_code=0 || exit_code=$?
+    assert "PR #0 doesn't crash" "$(( exit_code <= 128 ? 1 : 0 ))" "1"
 
-# Verify AppleScript escapes double quotes in tab title
-assert_contains "AppleScript escapes double quotes" \
-    "$(grep -A1 'TAB_TITLE=' "$SCRIPT" | grep 'escape')" "escape double quotes"
+    # Multiple valid flags combined
+    output=$("$SCRIPT" --no-color --no-env-copy --cleanup --help 2>&1) && exit_code=0 || exit_code=$?
+    assert_exit_code "Multiple flags with --help exits 0" "$exit_code" 0
 
-# Verify set -euo pipefail is set
-assert_contains "Script uses set -euo pipefail" \
-    "$(head -50 "$SCRIPT")" "set -euo pipefail"
+    # Flag requiring argument but missing it
+    output=$("$SCRIPT" 42 --repo 2>&1) && exit_code=0 || exit_code=$?
+    assert "Missing --repo value exits non-zero" "$(( exit_code != 0 ? 1 : 0 ))" "1"
 
-# Verify REVIEW_EXIT is captured safely (not killed by set -e)
-assert_contains "REVIEW_EXIT uses || pattern" \
-    "$(grep 'REVIEW_EXIT' "$SCRIPT")" "|| REVIEW_EXIT="
-
-# Verify run_claude uses subshell (not bare function)
-run_claude_line=$(grep -n 'run_claude()' "$SCRIPT")
-assert_contains "run_claude is a subshell" "$run_claude_line" "("
-
-# ═══════════════════════════════════════════════════════════════════════════
-#  7. HELPER FUNCTIONS — source color + function defs from script
-# ═══════════════════════════════════════════════════════════════════════════
-section "Helper Functions"
-
-# Source the color setup and helper functions (skip _use_color detection
-# since we want colors enabled for testing)
-RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'
-BLUE=$'\033[0;34m'; CYAN=$'\033[0;36m'; BOLD=$'\033[1m'
-DIM=$'\033[2m'; RESET=$'\033[0m'
-eval "$(grep -A1 '^info()\|^ok()\|^warn()\|^error()\|^fatal()\|^step()\|^_boxln()' "$SCRIPT" | grep -v '^--$')"
-
-# Capture info output
-info_out=$(info "test message" 2>&1)
-assert_contains "info() includes [INFO] tag" "$info_out" "[INFO]"
-assert_contains "info() includes the message" "$info_out" "test message"
-assert_contains "info() has ESC byte (colored)" "$info_out" "$ESC"
-
-# Capture ok output
-ok_out=$(ok "success" 2>&1)
-assert_contains "ok() includes [OK] tag" "$ok_out" "[OK]"
-assert_contains "ok() has ESC byte (colored)" "$ok_out" "$ESC"
-
-# Capture warn output
-warn_out=$(warn "careful" 2>&1)
-assert_contains "warn() includes [WARN] tag" "$warn_out" "[WARN]"
-
-# Capture error output (goes to stderr)
-error_out=$(error "failure" 2>&1)
-assert_contains "error() includes [ERROR] tag" "$error_out" "[ERROR]"
-
-# step() output
-step_out=$(step "doing things" 2>&1)
-assert_contains "step() includes the message" "$step_out" "doing things"
-
-# _boxln() output
-boxln_out=$(_boxln "║ test box line ║" 2>&1)
-assert_contains "_boxln() contains the line" "$boxln_out" "test box line"
-assert_contains "_boxln() has ESC byte (colored)" "$boxln_out" "$ESC"
-
-# Verify logging with empty colors (NO_COLOR simulation)
-(
-    RED=''; GREEN=''; YELLOW=''; BLUE=''; CYAN=''; BOLD=''; DIM=''; RESET=''
-    eval "$(grep -A1 '^info()\|^ok()' "$SCRIPT" | grep -v '^--$')"
-    plain_info=$(info "plain" 2>&1)
-    plain_ok=$(ok "plain" 2>&1)
-    # Should still contain tags but no ESC bytes
-    if [[ "$plain_info" == *"[INFO]"* && "$plain_info" != *"$ESC"* ]]; then
-        echo "NOCOLOR_INFO_OK"
-    fi
-    if [[ "$plain_ok" == *"[OK]"* && "$plain_ok" != *"$ESC"* ]]; then
-        echo "NOCOLOR_OK_OK"
-    fi
-) | {
-    read -r line1; read -r line2
-    assert "info() works with empty colors" "$line1" "NOCOLOR_INFO_OK"
-    assert "ok() works with empty colors" "$line2" "NOCOLOR_OK_OK"
-}
+    # Empty string as argument
+    output=$("$SCRIPT" "" 2>&1) && exit_code=0 || exit_code=$?
+    assert "Empty string PR exits non-zero" "$(( exit_code != 0 ? 1 : 0 ))" "1"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  8. PREREQUISITE CHECKING
+#  6. macOS COMPATIBILITY
 # ═══════════════════════════════════════════════════════════════════════════
-section "Prerequisites"
+if section "macOS Compatibility"; then
+    assert_not_contains "No realpath --relative-to" \
+        "$(grep 'realpath' "$SCRIPT")" "realpath --relative-to"
+    assert_contains "Uses python3 os.path.relpath" \
+        "$(grep 'python3.*relpath' "$SCRIPT")" "os.path.relpath"
 
-# Verify script checks for required tools
-for tool in gh git claude jq; do
-    assert_contains "Checks for $tool" \
-        "$(grep 'for cmd in' "$SCRIPT")" "$tool"
-done
+    assert_not_contains "No du -sb" "$(grep 'du -s' "$SCRIPT")" "du -sb"
+    assert_contains "Uses du -sk" "$(grep 'du -sk' "$SCRIPT")" "du -sk"
 
-# Verify gh auth status check exists
-assert_contains "Checks gh auth status" \
-    "$(grep 'gh auth status' "$SCRIPT")" "gh auth status"
+    stat_line=$(grep 'stat -c' "$SCRIPT" || echo "")
+    assert_contains "stat has BSD fallback" "$stat_line" "stat -f%z"
 
-# ═══════════════════════════════════════════════════════════════════════════
-#  9. COLOR RENDERING — real ESC bytes in iTerm2
-# ═══════════════════════════════════════════════════════════════════════════
-section "Color Rendering (iTerm2)"
-
-# Verify all colors produce visible output with ESC byte
-for name in RED GREEN YELLOW BLUE CYAN BOLD DIM; do
-    val="${!name}"
-    rendered=$(printf "%sX%s" "$val" "$RESET")
-    assert_contains "$name renders non-empty" "$rendered" "X"
-    assert_contains "$name contains ESC byte" "$rendered" "$ESC"
-done
-
-# Verify RESET removes color (cat -v shows control chars)
-rendered=$(printf "%scolored%snormal" "$RED" "$RESET" | cat -v)
-assert_contains "RESET clears RED (cat -v shows [0m)" "$rendered" "[0m"
-assert_contains "Text after RESET is present" "$rendered" "normal"
-
-# Test box-drawing characters render (UTF-8)
-box_output=$(printf "╔══╗\n║  ║\n╚══╝\n")
-assert_contains "Box-drawing chars render" "$box_output" "╔══╗"
-
-# Verify no printf embeds color vars in format string
-bad_pattern_count=$(grep -cE 'printf "\$\{(BOLD|RED|GREEN|YELLOW|BLUE|CYAN|DIM|RESET)' "$SCRIPT" 2>/dev/null || true)
-bad_pattern_count="${bad_pattern_count:-0}"
-bad_pattern_count="$(echo "$bad_pattern_count" | tr -d '[:space:]')"
-assert "No color vars in printf format strings" "$bad_pattern_count" "0"
+    # Behavioral: python3 relpath actually works on this system
+    rel=$(python3 -c "import os.path; print(os.path.relpath('/usr/local/bin', '/usr/local'))" 2>&1)
+    assert "python3 relpath works" "$rel" "bin"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  10. WORKTREE & LOCKFILE LOGIC
+#  7. SAFETY & SECURITY
 # ═══════════════════════════════════════════════════════════════════════════
-section "Worktree & Lockfile Logic"
+if section "Safety & Security"; then
+    bg_section=$(sed -n '/bg.*mode/,/exit 0/p' "$SCRIPT")
+    assert_not_contains "No eval in bg mode" "$bg_section" 'eval "$CMD"'
 
-# Verify lockfile path pattern
-assert_contains "Lockfile uses .lock-pr-N pattern" \
-    "$(grep 'LOCKFILE=' "$SCRIPT")" ".lock-pr-"
+    build_cmd_section=$(sed -n '/build_cmd/,/^    }/p' "$SCRIPT")
+    assert_contains "build_cmd uses printf %q" "$build_cmd_section" "printf '%q"
 
-# Verify cleanup trap is set
-assert_contains "EXIT trap is set" \
-    "$(grep 'trap.*EXIT' "$SCRIPT")" "_cleanup_on_exit"
+    assert_contains "set -euo pipefail" "$(head -50 "$SCRIPT")" "set -euo pipefail"
+    assert_contains "REVIEW_EXIT safe capture" \
+        "$(grep 'REVIEW_EXIT' "$SCRIPT")" "|| REVIEW_EXIT="
 
-# Verify stale lockfile detection (kill -0 check)
-assert_contains "Stale lockfile detected via kill -0" \
-    "$(grep -A2 'LOCK_PID' "$SCRIPT" | head -5)" "kill -0"
+    run_claude_line=$(grep -n 'run_claude()' "$SCRIPT")
+    assert_contains "run_claude is subshell" "$run_claude_line" "("
 
-# Verify _sq function exists (single-quote escaping for RC file)
-assert_contains "Has _sq() for safe quoting" \
-    "$(grep '_sq()' "$SCRIPT")" "_sq()"
+    # Verify logging uses %s not %b (prevents backslash injection)
+    info_def=$(grep '^info()' "$SCRIPT")
+    assert_contains "info() uses %s (not %b)" "$info_def" "%s"
+    assert_not_contains "info() avoids %b" "$info_def" "%b"
+
+    ok_def=$(grep '^ok()' "$SCRIPT")
+    assert_contains "ok() uses %s" "$ok_def" "%s"
+
+    step_def=$(grep '^step()' "$SCRIPT")
+    assert_contains "step() uses %s" "$step_def" "%s"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  11. PARALLEL MODE
+#  8. HELPER FUNCTIONS (behavioral, in isolated subshell)
 # ═══════════════════════════════════════════════════════════════════════════
-section "Parallel Mode"
+if section "Helper Functions"; then
+    # Source helpers in subshell for isolation
+    helper_results=$(
+        RED=$'\033[1;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'
+        BLUE=$'\033[0;94m'; CYAN=$'\033[0;36m'; BOLD=$'\033[1m'
+        DIM=$'\033[2m'; RESET=$'\033[0m'
+        ESC=$'\033'
+        eval "$(grep -A1 '^info()\|^ok()\|^warn()\|^error()\|^step()\|^_boxln()' "$SCRIPT" | grep -v '^--$')"
 
-# Verify tab modes are supported
-for mode in auto iterm tmux bg; do
-    assert_contains "Supports --tabs $mode" \
-        "$(grep -c "$mode" "$SCRIPT")" ""
-done
+        # Test each function
+        info_out=$(info "test message" 2>&1)
+        [[ "$info_out" == *"[INFO]"* && "$info_out" == *"test message"* && "$info_out" == *"$ESC"* ]] \
+            && echo "info:OK" || echo "info:FAIL"
 
-# Verify bg mode caches exit codes (was a bug — re-wait returned 127)
-assert_contains "BG mode caches exit codes" \
-    "$(grep 'BG_EXIT_CODES' "$SCRIPT")" "BG_EXIT_CODES"
+        ok_out=$(ok "success" 2>&1)
+        [[ "$ok_out" == *"[OK]"* && "$ok_out" == *"$ESC"* ]] \
+            && echo "ok:OK" || echo "ok:FAIL"
 
-# Verify first-iteration cursor skip (was a bug)
-assert_contains "BG mode skips cursor-up on first iter" \
-    "$(grep 'BG_FIRST_ITER' "$SCRIPT")" "BG_FIRST_ITER"
+        warn_out=$(warn "careful" 2>&1)
+        [[ "$warn_out" == *"[WARN]"* ]] && echo "warn:OK" || echo "warn:FAIL"
 
-# Verify diff function renamed to pdiff (was shadowing /usr/bin/diff)
-assert_contains "PR diff command is pdiff (not diff)" \
-    "$(grep 'pdiff()' "$SCRIPT")" "pdiff()"
-assert_not_contains "No diff() function (avoids shadow)" \
-    "$(grep -w 'diff()' "$SCRIPT")" "diff()"
+        error_out=$(error "failure" 2>&1)
+        [[ "$error_out" == *"[ERROR]"* ]] && echo "error:OK" || echo "error:FAIL"
 
-# Verify _boxln helper exists
-assert_contains "Has _boxln() helper" \
-    "$(grep '_boxln()' "$SCRIPT")" "_boxln()"
+        step_out=$(step "phase" 2>&1)
+        [[ "$step_out" == *"phase"* && "$step_out" == *"▸"* ]] \
+            && echo "step:OK" || echo "step:FAIL"
+
+        box_out=$(_boxln "║ test ║" 2>&1)
+        [[ "$box_out" == *"test"* && "$box_out" == *"$ESC"* ]] \
+            && echo "boxln:OK" || echo "boxln:FAIL"
+
+        # Test with empty colors (NO_COLOR simulation)
+        RED=''; GREEN=''; YELLOW=''; BLUE=''; CYAN=''; BOLD=''; DIM=''; RESET=''
+        eval "$(grep -A1 '^info()\|^ok()' "$SCRIPT" | grep -v '^--$')"
+        plain_info=$(info "plain" 2>&1)
+        [[ "$plain_info" == *"[INFO]"* && "$plain_info" != *"$ESC"* ]] \
+            && echo "nocolor_info:OK" || echo "nocolor_info:FAIL"
+        plain_ok=$(ok "plain" 2>&1)
+        [[ "$plain_ok" == *"[OK]"* && "$plain_ok" != *"$ESC"* ]] \
+            && echo "nocolor_ok:OK" || echo "nocolor_ok:FAIL"
+
+        # Test backslash safety: %s should NOT interpret \n
+        eval "$(grep -A1 '^info()' "$SCRIPT" | grep -v '^--$')"
+        BLUE=$'\033[0;94m'; RESET=$'\033[0m'
+        bs_out=$(info 'path/with\nslash' 2>&1)
+        [[ "$bs_out" == *'with\nslash'* ]] \
+            && echo "backslash_safe:OK" || echo "backslash_safe:FAIL"
+    )
+
+    for fn in info ok warn error step boxln nocolor_info nocolor_ok backslash_safe; do
+        result=$(echo "$helper_results" | grep "^${fn}:" | cut -d: -f2)
+        case "$fn" in
+            nocolor_info) assert "info() works with empty colors" "$result" "OK" ;;
+            nocolor_ok)   assert "ok() works with empty colors" "$result" "OK" ;;
+            backslash_safe) assert "info() doesn't interpret \\n" "$result" "OK" ;;
+            *)            assert "${fn}() works correctly" "$result" "OK" ;;
+        esac
+    done
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  9. PREREQUISITES
+# ═══════════════════════════════════════════════════════════════════════════
+if section "Prerequisites"; then
+    for tool in gh git claude jq; do
+        assert_contains "Checks for $tool" "$(grep 'for cmd in' "$SCRIPT")" "$tool"
+    done
+    assert_contains "Checks gh auth status" "$(grep 'gh auth status' "$SCRIPT")" "gh auth status"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  10. COLOR RENDERING
+# ═══════════════════════════════════════════════════════════════════════════
+if section "Color Rendering (iTerm2)"; then
+    # Re-source colors for this section
+    eval "$(grep -E "^[[:space:]]*(RED|GREEN|YELLOW|BLUE|CYAN|BOLD|DIM|RESET)=\\\$" "$SCRIPT" | sed 's/^[[:space:]]*//')"
+
+    for name in RED GREEN YELLOW BLUE CYAN BOLD DIM; do
+        val="${!name}"
+        rendered=$(printf "%sX%s" "$val" "$RESET")
+        assert_contains "$name renders visible text" "$rendered" "X"
+        assert_contains "$name contains ESC byte" "$rendered" "$ESC"
+    done
+
+    rendered=$(printf "%scolored%snormal" "$RED" "$RESET" | cat -v)
+    assert_contains "RESET clears RED" "$rendered" "[0m"
+    assert_contains "Text survives RESET" "$rendered" "normal"
+
+    box_output=$(printf "╔══╗\n║  ║\n╚══╝\n")
+    assert_contains "Box-drawing chars render" "$box_output" "╔══╗"
+
+    # No color vars embedded in printf format strings
+    bad_count=$(grep -cE 'printf "\$\{(BOLD|RED|GREEN|YELLOW|BLUE|CYAN|DIM|RESET)' "$SCRIPT" 2>/dev/null | tr -d '[:space:]')
+    assert "No color vars in printf format strings" "${bad_count:-0}" "0"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  11. BOX ALIGNMENT (behavioral)
+# ═══════════════════════════════════════════════════════════════════════════
+if section "Box Alignment"; then
+    # Extract all _boxln lines and verify consistent width
+    box_widths=$(grep '_boxln "' "$SCRIPT" | sed 's/.*_boxln "//;s/".*//' | while read -r line; do
+        echo "${#line}"
+    done | sort -u)
+    unique_widths=$(echo "$box_widths" | wc -l | tr -d ' ')
+    assert "All _boxln lines same width" "$unique_widths" "1"
+
+    # Verify the consistent width value (62 = ╔ + 60 ═ + ╗)
+    box_width=$(echo "$box_widths" | head -1)
+    assert "Box width is 62 chars" "$box_width" "62"
+
+    # Verify printf dynamic lines use matching format width
+    dynamic_box_lines=$(grep 'printf.*║.*%-[0-9]' "$SCRIPT" | grep -oE '%-[0-9]+s' | sort -u)
+    for spec in $dynamic_box_lines; do
+        width=$(echo "$spec" | grep -oE '[0-9]+')
+        assert "Dynamic box content width ($spec) fits" "$(( width <= 57 ? 1 : 0 ))" "1"
+    done
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  12. WORKTREE & LOCKFILE LOGIC
+# ═══════════════════════════════════════════════════════════════════════════
+if section "Worktree & Lockfile Logic"; then
+    assert_contains "Lockfile uses .lock-pr-N" "$(grep 'LOCKFILE=' "$SCRIPT")" ".lock-pr-"
+    assert_contains "EXIT trap is set" "$(grep 'trap.*EXIT' "$SCRIPT")" "_cleanup_on_exit"
+    assert_contains "Stale lock detected via kill -0" \
+        "$(grep -A2 'LOCK_PID' "$SCRIPT" | head -5)" "kill -0"
+    assert_contains "Has _sq() for safe quoting" "$(grep '_sq()' "$SCRIPT")" "_sq()"
+
+    # Behavioral: _sq escapes single quotes correctly
+    setup_tmp
+    sq_result=$(
+        eval "$(grep -A1 '_sq()' "$SCRIPT" | head -2)"
+        _sq "it's a test"
+    )
+    assert "_sq escapes single quotes" "$sq_result" "it'\''s a test"
+    cleanup_tmp
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  13. PARALLEL MODE
+# ═══════════════════════════════════════════════════════════════════════════
+if section "Parallel Mode"; then
+    for mode in auto iterm tmux bg; do
+        assert_contains "Supports --tabs $mode" "$(grep -c "$mode" "$SCRIPT")" ""
+    done
+
+    assert_contains "BG mode caches exit codes" \
+        "$(grep 'BG_EXIT_CODES' "$SCRIPT")" "BG_EXIT_CODES"
+    assert_contains "BG mode skips cursor-up on first iter" \
+        "$(grep 'BG_FIRST_ITER' "$SCRIPT")" "BG_FIRST_ITER"
+
+    assert_contains "PR diff command is pdiff" "$(grep 'pdiff()' "$SCRIPT")" "pdiff()"
+    assert_not_contains "No diff() shadow" "$(grep -w 'diff()' "$SCRIPT")" "diff()"
+    assert_contains "Has _boxln() helper" "$(grep '_boxln()' "$SCRIPT")" "_boxln()"
+
+    # Verify header comment matches RC file (pdiff not diff)
+    header_section=$(head -200 "$SCRIPT")
+    assert_contains "Header docs say pdiff" "$header_section" "pdiff"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  14. INTEGRATION: ENV FILE COPY LOGIC (with mock filesystem)
+# ═══════════════════════════════════════════════════════════════════════════
+if section "Integration: Env File Copy"; then
+    setup_tmp
+
+    # Create a mock git repo with env files
+    GIT_ROOT="$TEST_TMP/repo"
+    mkdir -p "$GIT_ROOT"
+    git -C "$GIT_ROOT" init -q
+    echo "tracked" > "$GIT_ROOT/main.txt"
+    git -C "$GIT_ROOT" add main.txt
+    git -C "$GIT_ROOT" commit -q -m "init"
+
+    # Create untracked env files
+    echo "SECRET=value" > "$GIT_ROOT/.env"
+    echo "TEST=value" > "$GIT_ROOT/.env.test"
+    mkdir -p "$GIT_ROOT/services/api"
+    echo "API_KEY=xxx" > "$GIT_ROOT/services/api/.env"
+
+    # Create a worktree-like destination (outside GIT_ROOT's parent to avoid early return)
+    WORKTREE_BASE=$(mktemp -d /tmp/pr-review-wt-XXXXXX)
+    WORKTREE="$WORKTREE_BASE/worktree"
+    mkdir -p "$WORKTREE"
+
+    # Extract and test the _try_copy function
+    copy_results=$(
+        cd "$GIT_ROOT"
+        GIT_ROOT="$GIT_ROOT"
+        WORKTREE_DIR="$WORKTREE"
+        WORKTREE_PARENT="$WORKTREE_BASE"
+        ENV_COPY_MAX_SIZE=$((5 * 1024 * 1024))
+        ENV_COPIED=0
+        ENV_SKIPPED=0
+        ENV_COPY_LOG="$TEST_TMP/copy.log"
+        : > "$ENV_COPY_LOG"
+
+        eval "$(sed -n '/_try_copy()/,/^    }/p' "$SCRIPT")"
+
+        _try_copy "$GIT_ROOT/.env" "test"
+        _try_copy "$GIT_ROOT/.env.test" "test"
+        _try_copy "$GIT_ROOT/services/api/.env" "test"
+        # Tracked file should be skipped
+        _try_copy "$GIT_ROOT/main.txt" "test"
+
+        echo "copied=$ENV_COPIED"
+        [[ -f "$WORKTREE/.env" ]] && echo "env_exists=yes" || echo "env_exists=no"
+        [[ -f "$WORKTREE/.env.test" ]] && echo "env_test_exists=yes" || echo "env_test_exists=no"
+        [[ -f "$WORKTREE/services/api/.env" ]] && echo "deep_env_exists=yes" || echo "deep_env_exists=no"
+        [[ -f "$WORKTREE/main.txt" ]] && echo "tracked_copied=yes" || echo "tracked_copied=no"
+    )
+
+    assert_contains "Env files copied (count=3)" "$copy_results" "copied=3"
+    assert_contains ".env copied to worktree" "$copy_results" "env_exists=yes"
+    assert_contains ".env.test copied to worktree" "$copy_results" "env_test_exists=yes"
+    assert_contains "Deep .env copied" "$copy_results" "deep_env_exists=yes"
+    assert_contains "Tracked file NOT copied" "$copy_results" "tracked_copied=no"
+
+    rm -rf "$WORKTREE_BASE"
+    cleanup_tmp
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  15. INTEGRATION: LOCKFILE BEHAVIOR (with mock filesystem)
+# ═══════════════════════════════════════════════════════════════════════════
+if section "Integration: Lockfile Behavior"; then
+    setup_tmp
+
+    LOCKFILE="$TEST_TMP/.lock-pr-99"
+
+    # Stale lockfile with non-existent PID
+    echo "99999" > "$LOCKFILE"
+    stale_result=$(
+        if kill -0 99999 2>/dev/null; then
+            echo "running"
+        else
+            echo "stale"
+        fi
+    )
+    assert "Detects stale PID 99999" "$stale_result" "stale"
+
+    # Current process PID is valid
+    echo $$ > "$LOCKFILE"
+    active_result=$(
+        pid=$(cat "$LOCKFILE")
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "running"
+        else
+            echo "stale"
+        fi
+    )
+    assert "Detects own PID as running" "$active_result" "running"
+
+    cleanup_tmp
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  16. INTEGRATION: PROMPT TEMPLATE
+# ═══════════════════════════════════════════════════════════════════════════
+if section "Integration: Prompt Template"; then
+    # Verify all placeholders are replaced
+    template_section=$(sed -n '/PROMPT_TEMPLATE/,/PROMPT_TEMPLATE/p' "$SCRIPT")
+    for placeholder in __PR_NUM__ __PR_TITLE__ __PR_AUTHOR__ __PR_HEAD__ __PR_BASE__ \
+                       __PR_URL__ __PR_ADDS__ __PR_DELS__ __PR_FILES__ __PR_BODY__ __PR_FILE_LIST__; do
+        assert_contains "Template has $placeholder" "$template_section" "$placeholder"
+    done
+
+    # Verify all placeholders have corresponding replacements
+    replacement_section=$(sed -n '/REVIEW_PROMPT=.*__PR_NUM__/,/^$/p' "$SCRIPT")
+    for placeholder in __PR_NUM__ __PR_TITLE__ __PR_AUTHOR__ __PR_HEAD__ __PR_BASE__ \
+                       __PR_URL__ __PR_ADDS__ __PR_DELS__ __PR_FILES__ __PR_BODY__ __PR_FILE_LIST__; do
+        assert_contains "Replacement for $placeholder" "$replacement_section" "$placeholder"
+    done
+
+    # Verify the review has all 4 specialist roles
+    for role in "code-quality" "security" "logic" "architecture"; do
+        assert_contains "Template includes $role reviewer" "$template_section" "$role"
+    done
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  RESULTS
 # ═══════════════════════════════════════════════════════════════════════════
+ELAPSED=$(( SECONDS - TEST_START ))
 echo ""
-printf "%s%s╔══════════════════════════════════════════════════╗%s\n" "$BOLD" "$CYAN" "$RESET"
+printf "%s%s╔════════════════════════════════════════════════════════════╗%s\n" "$BOLD" "$CYAN" "$RESET"
 if [[ "$FAIL" -eq 0 ]]; then
-    printf "%s%s║  ALL %d TESTS PASSED                             ║%s\n" "$BOLD" "$GREEN" "$TOTAL" "$RESET"
+    printf "%s%s║  %-57s║%s\n" "$BOLD" "$GREEN" "ALL $TOTAL TESTS PASSED" "$RESET"
 else
-    printf "%s%s║  %d PASSED, %d FAILED (of %d)                    ║%s\n" "$BOLD" "$RED" "$PASS" "$FAIL" "$TOTAL" "$RESET"
+    printf "%s%s║  %-57s║%s\n" "$BOLD" "$RED" "$PASS passed, $FAIL failed (of $TOTAL)" "$RESET"
 fi
-printf "%s%s╚══════════════════════════════════════════════════╝%s\n" "$BOLD" "$CYAN" "$RESET"
+[[ "$SKIP" -gt 0 ]] && \
+    printf "%s%s║  %-57s║%s\n" "$BOLD" "$YELLOW" "$SKIP skipped" "$RESET"
+printf "%s%s║  %-57s║%s\n" "$BOLD" "$CYAN" "Completed in ${ELAPSED}s" "$RESET"
+printf "%s%s╚════════════════════════════════════════════════════════════╝%s\n" "$BOLD" "$CYAN" "$RESET"
 echo ""
 
 [[ "$FAIL" -eq 0 ]] && exit 0 || exit 1
