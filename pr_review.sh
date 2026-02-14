@@ -1,50 +1,17 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  pr-review.sh — Automated PR Review with Claude Code Agent Teams
+#  pr_review.sh — AI-powered PR code review with Claude Code agent teams
 # ============================================================================
-#  Uses git worktrees to isolate each PR (no interference with existing
-#  branches), then launches Claude Code with an agent team to perform a
-#  thorough, multi-perspective code review.
 #
-#  Worktrees live in ~/.pr_reviewer/pr-<N>/  — a central directory
-#  in your home folder, keeping repos clean. Automatically git-ignored
-#  if placed inside a repo via --dir.
-#  Untracked env / config files (.env, .env.local, …) are copied into each
-#  worktree so the reviewer can run the full test suite.
+#  Usage:  pr_review.sh <PR_NUMBER...> [OPTIONS]
 #
-#  PARALLEL MODE: Pass multiple PR numbers and each review opens in its own
-#  iTerm2 tab, tmux window, or background process — easy to switch between.
+#  Checks out a PR into an isolated git worktree (~/.pr_reviewer/pr-<N>/),
+#  copies untracked env/config files so tests work, then launches Claude Code
+#  with 4 specialist reviewers (code quality, security, logic, architecture).
 #
-#  Requirements:
-#    - gh  (GitHub CLI, authenticated)
-#    - git ≥ 2.15
-#    - claude  (Claude Code CLI — brew install claude)
-#    - jq
+#  Requirements:  brew install gh jq claude && gh auth login
 #
-#  Usage:
-#    ./pr-review.sh <PR_NUMBER...> [OPTIONS]
-#
-#  Options:
-#    -r, --repo <owner/repo>    Target repository (default: current repo)
-#    -d, --dir  <path>          Parent dir for worktrees (default: ~/.pr_reviewer)
-#    -e, --env-files <glob>     Extra file patterns to copy (comma-separated)
-#    -m, --model <model>        Model for the lead agent (default: opus)
-#    -b, --max-turns <N>         Max agentic turns per PR (default: 50)
-#    -o, --output <path>        Write review to file (single-PR only)
-#    -c, --cleanup              Remove worktree after review completes
-#    -t, --no-teams             Use subagents instead of agent teams
-#    --no-skip-permissions      Don't use --dangerously-skip-permissions
-#    --no-env-copy              Skip copying environment / config files
-#    --no-color                 Disable colored output (also: NO_COLOR=1)
-#    --tabs <mode>              Tab mode: auto, iterm, tmux, bg (default: auto)
-#    -h, --help                 Show this help message
-#
-#  Examples:
-#    ./pr-review.sh 42                          # single review
-#    ./pr-review.sh 42 43 44                    # parallel — 3 iTerm tabs
-#    ./pr-review.sh 42 43 --tabs tmux           # force tmux windows
-#    ./pr-review.sh 42 -e ".env.staging"        # extra env files
-#    ./pr-review.sh 42 --max-turns 75 --cleanup    # with options
+#  See --help for full options and examples.
 # ============================================================================
 set -euo pipefail
 
@@ -114,120 +81,74 @@ ENV_COPY_MAX_SIZE=$((5 * 1024 * 1024))  # 5 MB per file
 # ── Parse arguments ─────────────────────────────────────────────────────────
 usage() {
     cat <<'HELPTEXT'
-pr-review.sh — Automated PR Review with Claude Code Agent Teams
-
-DESCRIPTION
-  Uses git worktrees to check out each PR in complete isolation, copies
-  untracked env/config files (.env, .env.local, .npmrc, …) so the test
-  suite works, then launches Claude Code with a 4-specialist agent team
-  (code quality, security, logic/correctness, architecture) to perform
-  a thorough review.
-
-  Results are saved to ~/.pr_reviewer/pr-<N>/.pr-review-context/REVIEW.md.
+pr_review.sh — AI-powered code review with Claude Code agent teams
 
 USAGE
-  ./pr-review.sh <PR_NUMBER...> [OPTIONS]
+  pr_review.sh <PR_NUMBER...> [OPTIONS]
 
-  Single PR:    ./pr-review.sh 42
-  Multiple PRs: ./pr-review.sh 42 43 44   (each opens in its own tab)
-
-OPTIONS
-  -r, --repo <owner/repo>    Target GitHub repository.
-                              Default: auto-detected from current git repo.
-
-  -d, --dir <path>           Parent directory for review worktrees.
-                              Default: ~/.pr_reviewer/
-
-  -e, --env-files <globs>    Extra file patterns to copy into the worktree,
-                              comma-separated. Added on top of the built-in
-                              list (.env*, .npmrc, config/master.key, …).
-                              Example: -e ".env.staging,config/local.yml"
-
-  -m, --model <model>        Claude model for the lead agent.
-                              Default: opus
-
-  -b, --max-turns <N>         Max agentic turns Claude can take per PR.
-                              Higher = more thorough but slower/costlier.
-                              Default: 50 (recommended range: 30–75)
-
-  -o, --output <path>        Write Claude's output to a file (enables
-                              non-interactive print mode). Single-PR only.
-
-  -c, --cleanup              Remove the worktree and branch after the
-                              review completes.
-
-  -t, --no-teams             Use Claude Code subagents (--agents JSON)
-                              instead of the experimental agent teams flag.
-
-  --no-skip-permissions      Require manual approval for each Claude tool
-                              use (default is autonomous/skip-permissions).
-
-  --no-color                 Disable colored output. Also honored:
-                              NO_COLOR=1, PR_REVIEW_NO_COLOR=1
-
-  --no-env-copy              Skip the automatic copying of .env and other
-                              untracked config files into the worktree.
-
-  --tabs <mode>              How to open parallel reviews (multi-PR only):
-                                auto   Detect terminal (default)
-                                iterm  Force iTerm2 tabs via AppleScript
-                                tmux   Force tmux session with named windows
-                                bg     Background processes with status dashboard
-
-  -h, --help                 Show this help message and exit.
-
-PARALLEL REVIEWS
-  Pass 2+ PR numbers and the script auto-detects your terminal:
-
-    iTerm2   Each PR opens in a named tab. Navigate with ⌘+←/→ or ⌘+1-9.
-             Tab titles update live: "PR #42 ⟳ reviewing…" → "PR #42 ✓ done"
-
-    tmux     A new session "pr-reviews-HHMMSS" is created with one named
-             window per PR. Navigate with Ctrl+B n/p or Ctrl+B w (picker).
-
-    bg       Falls back to background processes with a live status monitor
-             showing progress for each review.
-
-  Override with --tabs: ./pr-review.sh 42 43 --tabs tmux
-
-  When each review finishes, the screen clears and the REVIEW.md is
-  displayed front-and-center. Tabbing to any completed review shows
-  the result immediately — no scrolling through Claude's output.
-
-  Each tab drops into a shell with quick commands:
-    review   Re-display the review (opens in less for scrolling)
-    pdiff    View the full PR diff
-    files    Show PR metadata and changed file list
-    exit     Close the tab
-
-ENVIRONMENT FILES
-  Git worktrees only contain tracked files. This script automatically
-  copies untracked env/config files from the main repo into each worktree:
-
-    .env, .env.local, .env.test, .env.development, .env.staging, …
-    .npmrc, .yarnrc, .python-version, .ruby-version, .tool-versions
-    config/master.key, config/credentials.yml.enc
-    .vscode/settings.json, docker-compose.override.yml, and more
-
-  A deep scan (up to 4 dirs) also finds per-service .env files like
-  services/api/.env. The full manifest is logged to env-files-copied.log.
-
-  Add custom patterns with: -e ".env.custom,secrets/local.json"
-  Skip entirely with: --no-env-copy
+  Run from inside any git repo with a GitHub remote. The script auto-detects
+  the repository, fetches the PR, and creates an isolated worktree.
 
 EXAMPLES
-  ./pr-review.sh 42                              # review one PR
-  ./pr-review.sh 42 43 44                         # three PRs in parallel tabs
-  ./pr-review.sh 42 --repo myorg/myrepo           # different repo
-  ./pr-review.sh 42 --max-turns 75 --cleanup         # more turns, auto-cleanup
-  ./pr-review.sh 42 -e ".env.staging" --no-teams  # extra env, subagents mode
-  ./pr-review.sh 42 -o review-42.md               # non-interactive, save output
+  pr_review.sh 42                              # review a PR
+  pr_review.sh 42 43 44                        # three PRs in parallel tabs
+  pr_review.sh 42 --max-turns 75 --cleanup     # deeper review, auto-cleanup
+  pr_review.sh 42 -o review.md                 # save to file (non-interactive)
+  pr_review.sh 42 --repo myorg/myrepo          # review a PR from another repo
+  pr_review.sh 42 -e ".env.staging" --no-teams # custom env, subagent mode
+  NO_COLOR=1 pr_review.sh 42 -o out.md         # plain output for CI pipelines
+
+OPTIONS
+  Core
+    -r, --repo <owner/repo>  Target repository (default: auto-detected)
+    -m, --model <model>      Claude model for lead agent (default: opus)
+    -b, --max-turns <N>      Max agentic turns per PR (default: 50, range: 30–75)
+    -h, --help               Show this help
+
+  Output
+    -o, --output <path>      Write review to file (non-interactive, single-PR)
+    -c, --cleanup            Remove worktree after review completes
+    --no-color               Disable colors (also: NO_COLOR=1, PR_REVIEW_NO_COLOR=1)
+
+  Agent
+    -t, --no-teams           Use subagents instead of agent teams
+    --no-skip-permissions    Require manual approval for each tool use
+
+  Environment
+    -e, --env-files <globs>  Extra file patterns to copy (comma-separated)
+                             Example: -e ".env.staging,config/local.yml"
+    --no-env-copy            Skip copying .env and config files into worktree
+
+  Terminal
+    -d, --dir <path>         Worktree parent directory (default: ~/.pr_reviewer/)
+    --tabs <mode>            Parallel mode: auto | iterm | tmux | bg
+
+PARALLEL REVIEWS
+  Pass 2+ PR numbers and the terminal is auto-detected:
+
+    iTerm2    Named tabs, navigate with ⌘+←/→ or ⌘+1-9
+    tmux      Named windows in a session, Ctrl+B n/p or Ctrl+B w
+    Other     Background processes with live status dashboard
+
+  Override: pr_review.sh 42 43 --tabs tmux
+
+  Each completed tab provides quick commands:
+    review    Re-display the review      pdiff    View the PR diff
+    files     PR metadata & file list    exit     Close the tab
+
+ENVIRONMENT FILES
+  Git worktrees only contain tracked files. The script copies common untracked
+  files (.env, .npmrc, config/master.key, …) so tests and builds work.
+  Add custom patterns: -e ".env.staging,secrets/local.json"
+  Skip entirely: --no-env-copy
+  Manifest: ~/.pr_reviewer/pr-<N>/.pr-review-context/env-files-copied.log
+
+OUTPUT
+  Reviews are saved to: ~/.pr_reviewer/pr-<N>/.pr-review-context/REVIEW.md
+  With -o <path>, also written to the specified file.
 
 REQUIREMENTS
-  gh       GitHub CLI, authenticated (gh auth login)
-  git      ≥ 2.15 (worktree support)
-  claude   Claude Code CLI (brew install claude)
-  jq       JSON processor
+  brew install gh jq claude && gh auth login
 HELPTEXT
     exit 0
 }
