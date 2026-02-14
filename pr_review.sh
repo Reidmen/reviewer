@@ -18,7 +18,7 @@
 #  Requirements:
 #    - gh  (GitHub CLI, authenticated)
 #    - git ≥ 2.15
-#    - claude  (Claude Code CLI — npm i -g @anthropic-ai/claude-code)
+#    - claude  (Claude Code CLI — brew install claude)
 #    - jq
 #
 #  Usage:
@@ -226,7 +226,7 @@ EXAMPLES
 REQUIREMENTS
   gh       GitHub CLI, authenticated (gh auth login)
   git      ≥ 2.15 (worktree support)
-  claude   Claude Code CLI (npm i -g @anthropic-ai/claude-code)
+  claude   Claude Code CLI (brew install claude)
   jq       JSON processor
 HELPTEXT
     exit 0
@@ -260,6 +260,11 @@ while [[ $# -gt 0 ]]; do
 done
 [[ ${#PR_NUMBERS[@]} -eq 0 ]] && fatal "Missing required argument: PR number(s). Usage: $(basename "$0") <PR_NUMBER...> [OPTIONS]"
 
+# ── Opening banner (shown once, before any work) ─────────────────────────
+if [[ "$_SINGLE_MODE" == false ]]; then
+    echo ""
+    printf "%s%s  pr-review.sh%s  %s— AI-powered code review%s\n" "$BOLD" "$CYAN" "$RESET" "$DIM" "$RESET"
+fi
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  MULTI-PR ORCHESTRATION
@@ -558,12 +563,8 @@ PR_STATE=$(echo "$PR_JSON"  | jq -r '.state')
 # Update tab title with the actual PR title
 _set_tab_title "PR #${PR_NUMBER} — ${PR_TITLE:0:35}"
 
-info "Title:   $PR_TITLE"
-info "Author:  $PR_AUTHOR"
-info "Branch:  $PR_HEAD → $PR_BASE"
-info "Changes: +${PR_ADDS} -${PR_DELS} across ${PR_FILES} file(s)"
-info "State:   $PR_STATE"
-info "URL:     $PR_URL"
+ok "${BOLD}${PR_TITLE}${RESET} by @${PR_AUTHOR}"
+info "${PR_HEAD} → ${PR_BASE}  ·  +${PR_ADDS} -${PR_DELS}  ·  ${PR_FILES} file(s)  ·  ${PR_STATE}"
 [[ "$PR_STATE" == "MERGED" ]] && warn "This PR has already been merged."
 
 # ── Fetch the diff ──────────────────────────────────────────────────────────
@@ -687,8 +688,7 @@ git -C "$GIT_ROOT" fetch origin "pull/${PR_NUMBER}/head:${WORKTREE_BRANCH}" 2>/d
 git -C "$GIT_ROOT" worktree add "$WORKTREE_DIR" "$WORKTREE_BRANCH" 2>/dev/null \
     || fatal "Failed to create worktree at $WORKTREE_DIR"
 
-ok "Worktree created: $WORKTREE_DIR"
-ok "Branch: $WORKTREE_BRANCH"
+ok "Worktree ready: ${DIM}$WORKTREE_DIR${RESET}"
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  ENVIRONMENT / CONFIG FILE COPYING
@@ -798,9 +798,7 @@ ${PR_FILE_LIST}
 PREOF
 ok "PR context written to ${REVIEW_CONTEXT_DIR}/"
 
-# ── Build Claude prompt ───────────────────────────────────────────────────
-step "Preparing Claude Code review prompt"
-
+# ── Build Claude prompt (no user-visible step — just string templating) ──
 read -r -d '' REVIEW_PROMPT <<'PROMPT_TEMPLATE' || true
 You are leading a thorough code review of PR #__PR_NUM__: "__PR_TITLE__" by @__PR_AUTHOR__.
 
@@ -876,25 +874,17 @@ REVIEW_PROMPT="${REVIEW_PROMPT//__PR_BODY__/$PR_BODY}"
 REVIEW_PROMPT="${REVIEW_PROMPT//__PR_FILE_LIST__/$PR_FILE_LIST}"
 
 # ── Build Claude CLI arguments ─────────────────────────────────────────────
-step "Launching Claude Code"
-
 CLAUDE_ARGS=("--model" "$MODEL" "--max-turns" "$MAX_TURNS")
 
-[[ "$SKIP_PERMISSIONS" == true ]] && {
-    CLAUDE_ARGS+=("--dangerously-skip-permissions")
-    info "Running with --dangerously-skip-permissions (autonomous mode)"
-}
-[[ -n "$OUTPUT_FILE" ]] && {
-    CLAUDE_ARGS+=("-p")
-    info "Running in print mode (non-interactive). Output → $OUTPUT_FILE"
-}
+[[ "$SKIP_PERMISSIONS" == true ]] && CLAUDE_ARGS+=("--dangerously-skip-permissions")
+[[ -n "$OUTPUT_FILE" ]] && CLAUDE_ARGS+=("-p")
 
 CLAUDE_ENV=()
+AGENT_MODE="agent teams"
 if [[ "$USE_TEAMS" == true ]]; then
     CLAUDE_ENV+=("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1")
-    info "Agent teams: ${GREEN}ENABLED${RESET}"
 else
-    info "Agent teams: disabled (using subagents via --agents flag)"
+    AGENT_MODE="subagents"
     read -r -d '' AGENTS_JSON <<'AGENTS' || true
 {
   "code-quality-reviewer": {
@@ -920,14 +910,22 @@ else
 }
 AGENTS
     CLAUDE_ARGS+=("--agents" "$AGENTS_JSON")
-    info "Subagents: 4 specialist reviewers configured"
 fi
+
+# ── Build the launch summary line ─────────────────────────────────────────
+REVIEW_CONFIG_LINE="4 reviewers · ${MODEL} · ${MAX_TURNS} turns · ${AGENT_MODE}"
+[[ "$SKIP_PERMISSIONS" == true ]] && REVIEW_CONFIG_LINE="${REVIEW_CONFIG_LINE} · autonomous"
+[[ -n "$OUTPUT_FILE" ]] && REVIEW_CONFIG_LINE="${REVIEW_CONFIG_LINE} · output → ${OUTPUT_FILE}"
 
 # ── Execute ────────────────────────────────────────────────────────────────
 echo ""
 _boxln "╔════════════════════════════════════════════════════════════╗"
-printf "%s%s║  %-57s║%s\n" "$BOLD" "$CYAN" "Starting PR Review: #${PR_NUMBER}" "$RESET"
-printf "%s%s║  %-57s║%s\n" "$BOLD" "$CYAN" "$(echo "$PR_TITLE" | cut -c1-57)" "$RESET"
+echo ""
+printf "  %sPR #%s: %s%s\n" "$BOLD" "$PR_NUMBER" "$(echo "$PR_TITLE" | cut -c1-50)" "$RESET"
+printf "  %s@%s  ·  %s → %s  ·  +%s -%s  ·  %s file(s)%s\n" "$DIM" "$PR_AUTHOR" "$PR_HEAD" "$PR_BASE" "$PR_ADDS" "$PR_DELS" "$PR_FILES" "$RESET"
+echo ""
+printf "  %s%s%s\n" "$DIM" "$REVIEW_CONFIG_LINE" "$RESET"
+echo ""
 _boxln "╚════════════════════════════════════════════════════════════╝"
 echo ""
 

@@ -19,6 +19,7 @@ Git worktrees for full isolation. Four specialist reviewers. Parallel reviews in
 
 - [Why](#why)
 - [Quick Start](#quick-start)
+- [Setup](#setup)
 - [Requirements](#requirements)
 - [Usage](#usage)
 - [Parallel Reviews](#parallel-reviews)
@@ -43,16 +44,13 @@ Manual code reviews are slow, inconsistent, and drain senior engineers. This scr
 ## Quick Start
 
 ```bash
-# 1. Clone
-git clone git@github.com:Reidmen/reviewer.git && cd reviewer
-
-# 2. Install dependencies (macOS)
-brew install gh jq
+# 1. Install dependencies (macOS)
+brew install gh jq claude
 gh auth login
-npm i -g @anthropic-ai/claude-code
 
-# 3. Review a PR
-./pr_review.sh 42
+# 2. Clone and run
+git clone git@github.com:Reidmen/reviewer.git ~/reviewer
+~/reviewer/pr_review.sh 42
 ```
 
 That's it. The script handles worktree creation, environment setup, and agent orchestration automatically.
@@ -60,8 +58,39 @@ That's it. The script handles worktree creation, environment setup, and agent or
 > **Tip:** Pass multiple PR numbers to review them in parallel -- each opens in its own terminal tab.
 >
 > ```bash
-> ./pr_review.sh 42 43 44
+> ~/reviewer/pr_review.sh 42 43 44
 > ```
+
+---
+
+## Setup
+
+### Install dependencies
+
+```bash
+brew install gh jq claude
+gh auth login
+```
+
+### Install the script
+
+`pr_review.sh` is a single self-contained Bash script. Clone it somewhere and run it directly -- no build step, no package manager.
+
+```bash
+# Option A: Clone and use directly
+git clone git@github.com:Reidmen/reviewer.git ~/reviewer
+~/reviewer/pr_review.sh 42
+
+# Option B: Symlink to your PATH for convenience
+ln -s ~/reviewer/pr_review.sh /usr/local/bin/pr_review
+pr_review 42
+
+# Option C: Copy the script anywhere you like
+cp ~/reviewer/pr_review.sh ~/bin/pr_review.sh
+~/bin/pr_review.sh 42
+```
+
+Run `pr_review.sh` from inside any git repository that has a GitHub remote. The script auto-detects the repo, fetches the PR, and creates an isolated worktree under `~/.pr_reviewer/` -- your working directory is never touched.
 
 ---
 
@@ -71,7 +100,7 @@ That's it. The script handles worktree creation, environment setup, and agent or
 |------|---------|---------|
 | `gh` | `brew install gh` then `gh auth login` | GitHub CLI |
 | `git` | Pre-installed on macOS | Git 2.15+ for worktree support |
-| `claude` | `npm i -g @anthropic-ai/claude-code` | Claude Code CLI |
+| `claude` | `brew install claude` | Claude Code CLI |
 | `jq` | `brew install jq` | JSON processing |
 
 > **Note:** This tool uses the Claude API through Claude Code. You need an active Anthropic API key or a Claude Code subscription. Each PR review typically uses 30--75 agentic turns depending on the `--max-turns` setting.
@@ -198,13 +227,44 @@ When a review finishes, the tab clears and shows the completed review. Each tab 
                                                       +---------------+
 ```
 
-**Step by step:**
+### Step by step
 
-1. **Fetches PR metadata and diff** via `gh`
-2. **Creates an isolated git worktree** at `~/.pr_reviewer/pr-<N>/`
-3. **Copies env/config files** (`.env`, `.npmrc`, etc.) so tests can run
-4. **Launches Claude Code** with a 4-specialist agent team that reads code, runs tests, and produces findings
-5. **Generates `REVIEW.md`** with an executive summary, test results, categorized findings, and a file-by-file breakdown
+1. **Fetches PR metadata and diff** -- uses `gh pr view` and `gh pr diff` to pull the title, description, branch names, and full unified diff for the PR.
+
+2. **Creates an isolated git worktree** -- runs `git fetch origin pull/<N>/head` then `git worktree add` to check out the PR branch at `~/.pr_reviewer/pr-<N>/`. This is a full, independent copy of the repo at the PR's commit -- your working branch is never touched. See [Git worktree storage](#git-worktree-storage) below.
+
+3. **Copies env/config files** -- git worktrees only contain tracked files. The script copies common untracked files (`.env`, `.npmrc`, etc.) from the main repo into the worktree so tests, linters, and builds work. A manifest is logged to `env-files-copied.log`.
+
+4. **Writes PR context** -- the diff and PR metadata are saved into a `.pr-review-context/` directory inside the worktree, giving Claude structured access to everything it needs.
+
+5. **Launches Claude Code** -- `cd`s into the worktree and invokes `claude` with a detailed prompt. Claude creates an agent team of 4 specialists (code quality, security, logic/correctness, architecture). Each specialist reads the diff, explores the source code, runs the test suite and linters, and produces categorized findings.
+
+6. **Generates `REVIEW.md`** -- the lead agent synthesizes all findings into `.pr-review-context/REVIEW.md` with an executive summary, test results, categorized findings, and a file-by-file breakdown.
+
+### Git worktree storage
+
+The script uses [git worktrees](https://git-scm.com/docs/git-worktree) to avoid interfering with your working directory. Worktrees are stored **outside your repo**, under `~/.pr_reviewer/` by default:
+
+```
+~/.pr_reviewer/                  # configurable with --dir
+├── pr-42/                       # full checkout of PR #42's branch
+│   ├── (all tracked repo files)
+│   └── .pr-review-context/      # created by the script
+│       ├── pr.diff              # full unified diff
+│       ├── pr-info.md           # PR metadata (title, author, branch, description)
+│       ├── REVIEW.md            # final review output
+│       └── env-files-copied.log # manifest of copied env/config files
+├── pr-43/                       # another PR review (if running in parallel)
+├── .lock-pr-42                  # lockfile to prevent duplicate runs (auto-removed)
+└── .lock-pr-43
+```
+
+Key points about worktrees:
+
+- **Your working branch is never modified.** Each worktree is an independent checkout linked to the same `.git` directory. You can keep coding while a review runs.
+- **Worktrees are created fresh** each time. If a stale worktree from a previous run exists, the script removes it first.
+- **Lockfiles** prevent two reviews of the same PR from running simultaneously. They are cleaned up automatically when the script exits.
+- **Cleanup** is optional. Pass `--cleanup` to remove the worktree after the review finishes, or remove them manually with `rm -rf ~/.pr_reviewer/pr-<N>` and `git worktree prune`.
 
 ---
 
@@ -406,7 +466,7 @@ rm -rf ~/.pr_reviewer
 rm -rf /path/to/reviewer
 
 # (Optional) Remove Claude Code CLI
-npm uninstall -g @anthropic-ai/claude-code
+brew uninstall claude
 ```
 
 ---
