@@ -384,6 +384,7 @@ if section "Helper Functions"; then
 
         # Test backslash safety: %s should NOT interpret \n
         eval "$(grep -A1 '^info()' "$SCRIPT" | grep -v '^--$')"
+        # shellcheck disable=SC2034
         BLUE=$'\033[0;94m'; RESET=$'\033[0m'
         bs_out=$(info 'path/with\nslash' 2>&1)
         [[ "$bs_out" == *'with\nslash'* ]] \
@@ -526,12 +527,16 @@ if section "Integration: Env File Copy"; then
 
     # Extract and test the _try_copy function
     copy_results=$(
-        cd "$GIT_ROOT"
+        cd "$GIT_ROOT" || exit
         GIT_ROOT="$GIT_ROOT"
+        # shellcheck disable=SC2034
         WORKTREE_DIR="$WORKTREE"
+        # shellcheck disable=SC2034
         WORKTREE_PARENT="$WORKTREE_BASE"
+        # shellcheck disable=SC2034
         ENV_COPY_MAX_SIZE=$((5 * 1024 * 1024))
         ENV_COPIED=0
+        # shellcheck disable=SC2034
         ENV_SKIPPED=0
         ENV_COPY_LOG="$TEST_TMP/copy.log"
         : > "$ENV_COPY_LOG"
@@ -660,12 +665,12 @@ if section "Teammate Model Flag"; then
     assert_contains "Config line shows teammates when different" "$script_content" '(teammates: ${TEAMMATE_MODEL})'
 
     # Behavioral: --teammate-model sonnet --help exits cleanly
-    tm_help_output=$(bash "$SCRIPT" --teammate-model sonnet --help 2>&1)
+    bash "$SCRIPT" --teammate-model sonnet --help &>/dev/null
     tm_help_exit=$?
     assert "--teammate-model sonnet --help exits 0" "$tm_help_exit" "0"
 
     # Behavioral: -tm sonnet --help exits cleanly
-    tm_short_help_output=$(bash "$SCRIPT" -tm sonnet --help 2>&1)
+    bash "$SCRIPT" -tm sonnet --help &>/dev/null
     tm_short_help_exit=$?
     assert "-tm sonnet --help exits 0" "$tm_short_help_exit" "0"
 fi
