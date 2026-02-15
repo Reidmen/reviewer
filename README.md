@@ -1,17 +1,6 @@
-<div align="center">
-
 # reviewer
 
-**AI-powered PR code review with Claude Code agent teams**
-
-Four specialist reviewers. Full git worktree isolation. Parallel reviews in iTerm2, tmux, or background.
-
-[![Shell](https://img.shields.io/badge/shell-bash%205.0%2B-blue)](#requirements)
-[![Tests](https://img.shields.io/badge/tests-219%20passing-brightgreen)](#testing)
-[![macOS](https://img.shields.io/badge/platform-macOS-lightgrey)](#requirements)
-[![License](https://img.shields.io/badge/license-MIT-green)](#license)
-
-</div>
+A bash script to run parallel Claude Code agent reviews on GitHub PRs.
 
 ---
 
@@ -72,14 +61,13 @@ Multiple PRs open in parallel tabs automatically:
   └──────────────────────────────────────────┘
 ```
 
-Each reviewer can run tests, linters, and type-checkers inside the worktree. The lead agent synthesizes all findings into a structured review.
+Each reviewer runs tests, linters, and type-checkers inside the worktree. The lead agent synthesizes all findings into a structured review.
 
 ---
 
 ## Setup
 
 ```bash
-# Install dependencies
 brew install gh jq claude
 gh auth login
 
@@ -131,17 +119,6 @@ reviewer.sh <PR_NUMBER...> [OPTIONS]
 | `--no-color` | Disable colors | auto-detected |
 | `-h, --help` | Show help | -- |
 
-<details>
-<summary><strong>Color behavior</strong></summary>
-
-Colors are enabled when stdout/stderr are TTYs. Disabled by:
-- Piped or redirected output
-- `NO_COLOR=1` (per [no-color.org](https://no-color.org))
-- `PR_REVIEW_NO_COLOR=1`
-- `--no-color` flag
-
-</details>
-
 ---
 
 ## Parallel Reviews
@@ -173,6 +150,24 @@ NO_COLOR=1 reviewer.sh 42 -o out.md          # plain output for CI
 
 ---
 
+## Environment Files
+
+Worktrees only contain tracked files. The script copies common untracked files (`.env`, `.npmrc`, `config/master.key`, ...) so tests and builds work.
+
+```bash
+reviewer.sh 42 -e ".env.staging,secrets/local.json"  # add patterns
+reviewer.sh 42 --no-env-copy                          # skip entirely
+```
+
+<details>
+<summary><strong>Default patterns</strong></summary>
+
+`.env*`, `.npmrc`, `.yarnrc`, `.yarnrc.yml`, `.pnp.cjs`, `.python-version`, `.ruby-version`, `.tool-versions`, `config/master.key`, `config/credentials.yml.enc`, `local.properties`, `docker-compose.override.yml`, `.vscode/settings.json`, `.idea/workspace.xml`, `*.auto.tfvars`, `terraform.tfvars`, `Procfile.dev`, plus a 4-level deep scan for per-service `.env` files.
+
+</details>
+
+---
+
 ## File Structure
 
 ```
@@ -194,24 +189,6 @@ NO_COLOR=1 reviewer.sh 42 -o out.md          # plain output for CI
 
 ---
 
-## Environment Files
-
-Worktrees only contain tracked files. The script copies common untracked files (`.env`, `.npmrc`, `config/master.key`, ...) so tests and builds work.
-
-```bash
-reviewer.sh 42 -e ".env.staging,secrets/local.json"  # add patterns
-reviewer.sh 42 --no-env-copy                          # skip entirely
-```
-
-<details>
-<summary><strong>Default patterns</strong></summary>
-
-`.env*`, `.npmrc`, `.yarnrc`, `.yarnrc.yml`, `.pnp.cjs`, `.python-version`, `.ruby-version`, `.tool-versions`, `config/master.key`, `config/credentials.yml.enc`, `local.properties`, `docker-compose.override.yml`, `.vscode/settings.json`, `.idea/workspace.xml`, `*.auto.tfvars`, `terraform.tfvars`, `Procfile.dev`, plus a 4-level deep scan for per-service `.env` files.
-
-</details>
-
----
-
 ## Testing
 
 ```bash
@@ -219,7 +196,14 @@ reviewer.sh 42 --no-env-copy                          # skip entirely
 ./test_reviewer.sh "Teammate"   # filter by section name
 ```
 
-Covers: ANSI colors, TTY/NO_COLOR detection, iTerm2 escapes, argument parsing, edge cases, macOS compat, safety, helpers, worktree logic, parallel mode, env file copying, model validation, missing-arg guards.
+### Static Analysis
+
+```bash
+brew install shellcheck
+shellcheck reviewer.sh test_reviewer.sh
+```
+
+Both scripts pass ShellCheck with no warnings (`-S warning`). Remaining info-level notes are intentional (e.g. subshell variable scope in test harness, deliberate glob expansion for env file patterns).
 
 ---
 
@@ -239,7 +223,7 @@ Covers: ANSI colors, TTY/NO_COLOR detection, iTerm2 escapes, argument parsing, e
 | Stale lockfile | `rm ~/.reviewer/.lock-pr-<N>` |
 | Worktree issues | `rm -rf ~/.reviewer/pr-<N> && git worktree prune` |
 | Turn limit hit | `reviewer.sh 42 --max-turns 75` |
-| Missing env files | Check `~/.reviewer/pr-<N>/.pr-review-context/env-files-copied.log`, add with `-e` |
+| Missing env files | Check `env-files-copied.log`, add with `-e` |
 
 ---
 
@@ -249,16 +233,6 @@ Covers: ANSI colors, TTY/NO_COLOR detection, iTerm2 escapes, argument parsing, e
 rm -rf ~/.reviewer          # remove worktrees and data
 rm -rf /path/to/reviewer    # remove the script
 ```
-
----
-
-## Contributing
-
-1. Fork, branch, make changes
-2. Run `./test_reviewer.sh` — all 219 tests must pass
-3. Submit a pull request
-
-Issues and feature requests: [github.com/Reidmen/reviewer/issues](https://github.com/Reidmen/reviewer/issues)
 
 ---
 
