@@ -627,6 +627,51 @@ if section "Integration: Prompt Template"; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  17. TEAMMATE MODEL FLAG
+# ═══════════════════════════════════════════════════════════════════════════
+if section "Teammate Model Flag"; then
+    script_content=$(cat "$SCRIPT")
+
+    # Help text mentions the flag
+    help_output=$(bash "$SCRIPT" --help 2>&1 || true)
+    assert_contains "--teammate-model in help" "$help_output" "--teammate-model"
+    assert_contains "-tm in help" "$help_output" "-tm"
+
+    # Default variable exists
+    assert_contains "TEAMMATE_MODEL default variable" "$script_content" 'TEAMMATE_MODEL=""'
+
+    # Argument parsing case exists
+    assert_contains "Parsing case for -tm|--teammate-model" "$script_content" '-tm|--teammate-model)'
+
+    # Inheritance logic: defaults to MODEL when unset
+    assert_contains "Inheritance resolves TEAMMATE_MODEL from MODEL" "$script_content" '[[ -z "$TEAMMATE_MODEL" ]] && TEAMMATE_MODEL="$MODEL"'
+
+    # Passthrough handles the flag
+    assert_contains "Passthrough passes --teammate-model" "$script_content" '--teammate-model'
+
+    # Subagent JSON uses TEAMMATE_MODEL variable (not hardcoded "opus")
+    agents_section=$(sed -n '/AGENTS_JSON/,/^AGENTS$/p' "$SCRIPT")
+    assert_contains "Subagent JSON uses TEAMMATE_MODEL" "$agents_section" 'TEAMMATE_MODEL'
+    assert_not_contains "Subagent JSON does not hardcode opus" "$agents_section" '"model": "opus"'
+
+    # Agent Teams mode has teammate model prompt section
+    assert_contains "Agent Teams prompt includes Teammate Model section" "$script_content" '## Teammate Model'
+
+    # Config display line handles teammate model
+    assert_contains "Config line shows teammates when different" "$script_content" '(teammates: ${TEAMMATE_MODEL})'
+
+    # Behavioral: --teammate-model sonnet --help exits cleanly
+    tm_help_output=$(bash "$SCRIPT" --teammate-model sonnet --help 2>&1 || true)
+    tm_help_exit=$?
+    assert "--teammate-model sonnet --help exits 0" "$tm_help_exit" "0"
+
+    # Behavioral: -tm sonnet --help exits cleanly
+    tm_short_help_output=$(bash "$SCRIPT" -tm sonnet --help 2>&1 || true)
+    tm_short_help_exit=$?
+    assert "-tm sonnet --help exits 0" "$tm_short_help_exit" "0"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  RESULTS
 # ═══════════════════════════════════════════════════════════════════════════
 ELAPSED=$(( SECONDS - TEST_START ))

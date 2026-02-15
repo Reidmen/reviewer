@@ -53,6 +53,7 @@ PR_NUMBERS=()
 REPO=""
 WORKTREE_PARENT=""
 MODEL="opus"
+TEAMMATE_MODEL=""       # Default: inherit lead model
 MAX_TURNS="50"
 OUTPUT_FILE=""
 CLEANUP=false
@@ -102,6 +103,8 @@ OPTIONS
   Core
     -r, --repo <owner/repo>  Target repository (default: auto-detected)
     -m, --model <model>      Claude model for lead agent (default: opus)
+    -tm, --teammate-model <model>
+                             Model for teammate agents (default: same as --model)
     -b, --max-turns <N>      Max agentic turns per PR (default: 50, range: 30–75)
     -h, --help               Show this help
 
@@ -160,6 +163,7 @@ while [[ $# -gt 0 ]]; do
         -d|--dir)              WORKTREE_PARENT="$2"; shift 2 ;;
         -e|--env-files)        EXTRA_ENV_PATTERNS="$2"; shift 2 ;;
         -m|--model)            MODEL="$2"; shift 2 ;;
+        -tm|--teammate-model)  TEAMMATE_MODEL="$2"; shift 2 ;;
         -b|--max-turns)         MAX_TURNS="$2"; shift 2 ;;
         -o|--output)           OUTPUT_FILE="$2"; shift 2 ;;
         -c|--cleanup)          CLEANUP=true; shift ;;
@@ -179,6 +183,7 @@ while [[ $# -gt 0 ]]; do
             fi ;;
     esac
 done
+[[ -z "$TEAMMATE_MODEL" ]] && TEAMMATE_MODEL="$MODEL"
 [[ ${#PR_NUMBERS[@]} -eq 0 ]] && fatal "Missing required argument: PR number(s). Usage: $(basename "$0") <PR_NUMBER...> [OPTIONS]"
 
 # ── Opening banner (shown once, before any work) ─────────────────────────
@@ -203,6 +208,7 @@ if [[ ${#PR_NUMBERS[@]} -gt 1 && "$_SINGLE_MODE" == false ]]; then
     [[ -n "$WORKTREE_PARENT" ]]   && PASSTHROUGH_ARGS+=("--dir" "$WORKTREE_PARENT")
     [[ -n "$EXTRA_ENV_PATTERNS" ]]&& PASSTHROUGH_ARGS+=("--env-files" "$EXTRA_ENV_PATTERNS")
     [[ "$MODEL" != "opus" ]]    && PASSTHROUGH_ARGS+=("--model" "$MODEL")
+    [[ "$TEAMMATE_MODEL" != "$MODEL" ]] && PASSTHROUGH_ARGS+=("--teammate-model" "$TEAMMATE_MODEL")
     [[ "$MAX_TURNS" != "50" ]]     && PASSTHROUGH_ARGS+=("--max-turns" "$MAX_TURNS")
     [[ "$CLEANUP" == true ]]      && PASSTHROUGH_ARGS+=("--cleanup")
     [[ "$USE_TEAMS" == false ]]   && PASSTHROUGH_ARGS+=("--no-teams")
@@ -804,29 +810,34 @@ CLAUDE_ENV=()
 AGENT_MODE="agent teams"
 if [[ "$USE_TEAMS" == true ]]; then
     CLAUDE_ENV+=("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1")
+    REVIEW_PROMPT+="
+
+## Teammate Model
+
+IMPORTANT: When creating each teammate agent, you MUST specify the model \"${TEAMMATE_MODEL}\" for all teammates. Use the model parameter to set each teammate to \"${TEAMMATE_MODEL}\". Do not use any other model."
 else
     AGENT_MODE="subagents"
-    read -r -d '' AGENTS_JSON <<'AGENTS' || true
+    read -r -d '' AGENTS_JSON <<AGENTS || true
 {
   "code-quality-reviewer": {
     "description": "Analyzes code quality, readability, naming, DRY/SOLID, design patterns, code smells.",
     "prompt": "You are a senior code quality reviewer. Analyze the PR diff and source files. Focus on readability, naming, DRY/SOLID, design patterns, complexity. Run linters if available. Use 🔴/🟡/🟢/ℹ️. Diff at .pr-review-context/pr.diff.",
-    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "opus"
+    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "${TEAMMATE_MODEL}"
   },
   "security-reviewer": {
     "description": "Audits for security vulnerabilities, injection, auth, data exposure, OWASP Top 10.",
     "prompt": "You are a security reviewer. Audit for: injection, auth issues, data exposure, insecure defaults, missing validation, hardcoded secrets, OWASP Top 10. Use 🔴/🟡/🟢/ℹ️. Diff at .pr-review-context/pr.diff.",
-    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "opus"
+    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "${TEAMMATE_MODEL}"
   },
   "logic-reviewer": {
     "description": "Verifies business logic, edge cases, error handling, race conditions, tests.",
     "prompt": "You are a logic reviewer. Verify business logic, edge cases, error handling, race conditions, null safety, test coverage. Run the test suite. Use 🔴/🟡/🟢/ℹ️. Diff at .pr-review-context/pr.diff.",
-    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "opus"
+    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "${TEAMMATE_MODEL}"
   },
   "architecture-reviewer": {
     "description": "Evaluates architecture, API design, backward compat, performance, scalability.",
     "prompt": "You are an architecture reviewer. Evaluate architectural decisions, API design, backward compat, performance, scalability, dependency management. Use 🔴/🟡/🟢/ℹ️. Diff at .pr-review-context/pr.diff.",
-    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "opus"
+    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "${TEAMMATE_MODEL}"
   }
 }
 AGENTS
@@ -834,7 +845,11 @@ AGENTS
 fi
 
 # ── Build the launch summary line ─────────────────────────────────────────
-REVIEW_CONFIG_LINE="4 reviewers · ${MODEL} · ${MAX_TURNS} turns · ${AGENT_MODE}"
+if [[ "$TEAMMATE_MODEL" != "$MODEL" ]]; then
+    REVIEW_CONFIG_LINE="4 reviewers · ${MODEL} (teammates: ${TEAMMATE_MODEL}) · ${MAX_TURNS} turns · ${AGENT_MODE}"
+else
+    REVIEW_CONFIG_LINE="4 reviewers · ${MODEL} · ${MAX_TURNS} turns · ${AGENT_MODE}"
+fi
 [[ "$SKIP_PERMISSIONS" == true ]] && REVIEW_CONFIG_LINE="${REVIEW_CONFIG_LINE} · autonomous"
 [[ -n "$OUTPUT_FILE" ]] && REVIEW_CONFIG_LINE="${REVIEW_CONFIG_LINE} · output → ${OUTPUT_FILE}"
 
