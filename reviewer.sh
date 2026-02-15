@@ -464,6 +464,27 @@ _set_tab_title() {
     printf '\e]0;%s\a' "$title" 2>/dev/null || true
 }
 
+# Send a macOS notification (system-level + iTerm2 banner + tmux message)
+_notify() {
+    local title="$1" body="$2" subtitle="${3:-}" sound="${4:-Glass}"
+    # macOS system notification via AppleScript (argv avoids injection)
+    osascript - "$title" "$body" "$subtitle" "$sound" <<'APPLESCRIPT' 2>/dev/null || true
+on run argv
+    set opts to {title:(item 1 of argv), sound name:(item 4 of argv)}
+    if (item 3 of argv) is not "" then set opts to opts & {subtitle:(item 3 of argv)}
+    display notification (item 2 of argv) with properties opts
+end run
+APPLESCRIPT
+    # iTerm2 proprietary notification (banner when app not focused)
+    if [[ "${TERM_PROGRAM:-}" == "iTerm.app" || "${LC_TERMINAL:-}" == "iTerm2" ]]; then
+        printf '\e]9;%s\a' "$body" 2>/dev/null || true
+    fi
+    # tmux message bar
+    if [[ -n "${TMUX:-}" ]]; then
+        tmux display-message "${title}: ${body}" 2>/dev/null || true
+    fi
+}
+
 _set_tab_title "PR #${PR_NUMBER} — loading..."
 
 # ── Validate tooling ───────────────────────────────────────────────────────
@@ -927,10 +948,12 @@ echo ""
 REVIEW_FILE="${REVIEW_CONTEXT_DIR}/REVIEW.md"
 
 if [[ $REVIEW_EXIT -eq 0 ]]; then
+    _notify "reviewer" "PR #${PR_NUMBER} review complete" "${PR_TITLE:0:50}" "Glass"
     _set_tab_title "PR #${PR_NUMBER} ✓ ${PR_TITLE:0:30}"
     ok "Review completed successfully"
     [[ -n "$OUTPUT_FILE" && -f "$REVIEW_FILE" && ! -s "$OUTPUT_FILE" ]] && cp "$REVIEW_FILE" "$OUTPUT_FILE"
 else
+    _notify "reviewer" "PR #${PR_NUMBER} review failed (exit $REVIEW_EXIT)" "${PR_TITLE:0:50}" "Basso"
     _set_tab_title "PR #${PR_NUMBER} ✗ failed"
     warn "Claude exited with code $REVIEW_EXIT"
 fi

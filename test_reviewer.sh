@@ -737,6 +737,59 @@ if section "Missing Argument Guard"; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  20. MACOS NOTIFICATIONS
+# ═══════════════════════════════════════════════════════════════════════════
+if section "macOS Notifications"; then
+    script_content=$(cat "$SCRIPT")
+
+    # Structural: _notify function exists with expected parameters
+    assert_contains "_notify function exists" "$script_content" '_notify()'
+    notify_fn=$(sed -n '/_notify()/,/^}/p' "$SCRIPT")
+    assert_contains "_notify uses osascript" "$notify_fn" 'osascript'
+    assert_contains "_notify uses on run argv (injection-safe)" "$notify_fn" 'on run argv'
+    assert_contains "_notify uses display notification" "$notify_fn" 'display notification'
+    assert_contains "_notify uses sound" "$notify_fn" 'sound name'
+    assert_contains "_notify has || true guard" "$notify_fn" '|| true'
+    assert_contains "_notify accepts subtitle param" "$notify_fn" 'subtitle'
+
+    # Structural: iTerm2 escape guarded behind detection
+    assert_contains "_notify checks TERM_PROGRAM" "$notify_fn" 'TERM_PROGRAM'
+    assert_contains "_notify uses iTerm2 \\e]9 escape" "$notify_fn" "printf '\e]9;"
+
+    # Structural: tmux notification path
+    assert_contains "_notify checks TMUX" "$notify_fn" 'TMUX'
+    assert_contains "_notify uses tmux display-message" "$notify_fn" 'tmux display-message'
+
+    # Structural: called in success and failure paths
+    success_block=$(sed -n '/REVIEW_EXIT.*-eq 0/,/^else/p' "$SCRIPT")
+    failure_block=$(awk '/^else$/,/^fi$/' "$SCRIPT")
+    assert_contains "_notify called on success" "$success_block" '_notify'
+    assert_contains "_notify called on failure" "$failure_block" '_notify'
+    assert_contains "Success notification includes PR title" "$success_block" 'PR_TITLE'
+    assert_contains "Failure notification includes PR title" "$failure_block" 'PR_TITLE'
+
+    # Behavioral: _notify runs without error when osascript is stubbed
+    notify_exit=$(
+        osascript() { :; }
+        export -f osascript
+        eval "$(sed -n '/_notify()/,/^}/p' "$SCRIPT")"
+        _notify "test" "body" "subtitle" "Glass" >/dev/null 2>&1
+        echo $?
+    )
+    assert "_notify exits 0 with stubbed osascript" "$notify_exit" "0"
+
+    # Behavioral: _notify runs without error when osascript is missing
+    no_osascript_exit=$(
+        osascript() { return 127; }
+        export -f osascript
+        eval "$(sed -n '/_notify()/,/^}/p' "$SCRIPT")"
+        _notify "test" "body" "" "Glass" >/dev/null 2>&1
+        echo $?
+    )
+    assert "_notify exits 0 without osascript" "$no_osascript_exit" "0"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  RESULTS
 # ═══════════════════════════════════════════════════════════════════════════
 ELAPSED=$(( SECONDS - TEST_START ))
