@@ -464,6 +464,13 @@ _set_tab_title() {
     printf '\e]0;%s\a' "$title" 2>/dev/null || true
 }
 
+# Send a macOS notification (system-level + iTerm2 banner)
+_notify() {
+    local title="$1" body="$2"
+    osascript -e "display notification \"$body\" with title \"$title\"" 2>/dev/null || true
+    printf '\e]9;%s\a' "$body" 2>/dev/null || true
+}
+
 _set_tab_title "PR #${PR_NUMBER} — loading..."
 
 # ── Validate tooling ───────────────────────────────────────────────────────
@@ -924,10 +931,12 @@ echo ""
 REVIEW_FILE="${REVIEW_CONTEXT_DIR}/REVIEW.md"
 
 if [[ $REVIEW_EXIT -eq 0 ]]; then
+    _notify "reviewer" "PR #${PR_NUMBER} review complete"
     _set_tab_title "PR #${PR_NUMBER} ✓ ${PR_TITLE:0:30}"
     ok "Review completed successfully"
     [[ -n "$OUTPUT_FILE" && -f "$REVIEW_FILE" && ! -s "$OUTPUT_FILE" ]] && cp "$REVIEW_FILE" "$OUTPUT_FILE"
 else
+    _notify "reviewer" "PR #${PR_NUMBER} review failed"
     _set_tab_title "PR #${PR_NUMBER} ✗ failed"
     warn "Claude exited with code $REVIEW_EXIT"
 fi

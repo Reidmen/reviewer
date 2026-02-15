@@ -732,6 +732,26 @@ if section "Missing Argument Guard"; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  20. MACOS NOTIFICATIONS
+# ═══════════════════════════════════════════════════════════════════════════
+if section "macOS Notifications"; then
+    script_content=$(cat "$SCRIPT")
+
+    # Structural: _notify function exists
+    assert_contains "_notify function exists" "$script_content" '_notify()'
+    assert_contains "_notify uses osascript" "$script_content" 'osascript -e "display notification'
+    assert_contains "_notify uses iTerm2 \\e]9 escape" "$script_content" "printf '\e]9;"
+
+    # Structural: called on success and failure
+    assert_contains "_notify called on success" "$script_content" '_notify "reviewer" "PR #${PR_NUMBER} review complete"'
+    assert_contains "_notify called on failure" "$script_content" '_notify "reviewer" "PR #${PR_NUMBER} review failed"'
+
+    # Structural: both calls use || true guards
+    notify_fn=$(sed -n '/_notify()/,/^}/p' "$SCRIPT")
+    assert_contains "osascript has || true guard" "$notify_fn" '|| true'
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  RESULTS
 # ═══════════════════════════════════════════════════════════════════════════
 ELAPSED=$(( SECONDS - TEST_START ))
