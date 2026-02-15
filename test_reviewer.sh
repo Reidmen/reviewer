@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  test_pr_review.sh — Test suite for pr_review.sh
+#  test_reviewer.sh — Test suite for reviewer.sh
 # ============================================================================
 #  Covers: ANSI colors, TTY/NO_COLOR detection, argument parsing, edge cases,
 #  macOS compatibility, iTerm2 escapes, safety, helpers, rendering, worktree
 #  logic, parallel mode, behavioral tests, and integration with mocks.
 #
-#  Usage:  ./test_pr_review.sh [FILTER]
+#  Usage:  ./test_reviewer.sh [FILTER]
 #  Exit:   0 = all pass, 1 = failures
 #
-#  Filter: ./test_pr_review.sh "Edge"     # run only sections matching "Edge"
+#  Filter: ./test_reviewer.sh "Edge"     # run only sections matching "Edge"
 # ============================================================================
 set -uo pipefail
 
@@ -23,7 +23,7 @@ CYAN=$'\033[0;36m';   BOLD=$'\033[1m';      DIM=$'\033[2m';  RESET=$'\033[0m'
 ESC=$'\033'
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SCRIPT="${SCRIPT_DIR}/pr_review.sh"
+SCRIPT="${SCRIPT_DIR}/reviewer.sh"
 TEST_TMP=""
 
 # ── Assertions ─────────────────────────────────────────────────────────────
@@ -112,7 +112,7 @@ section() {
 
 # ── Test fixtures ──────────────────────────────────────────────────────────
 setup_tmp() {
-    TEST_TMP=$(mktemp -d /tmp/pr-review-test-XXXXXX)
+    TEST_TMP=$(mktemp -d /tmp/reviewer-test-XXXXXX)
 }
 
 cleanup_tmp() {
@@ -124,14 +124,14 @@ trap 'cleanup_tmp' EXIT
 
 # ── Pre-flight ─────────────────────────────────────────────────────────────
 printf "%s%s╔════════════════════════════════════════════════════════════╗%s\n" "$BOLD" "$CYAN" "$RESET"
-printf "%s%s║  pr_review.sh — Test Suite                                ║%s\n" "$BOLD" "$CYAN" "$RESET"
+printf "%s%s║  reviewer.sh — Test Suite                                ║%s\n" "$BOLD" "$CYAN" "$RESET"
 if [[ -n "$FILTER" ]]; then
     printf "%s%s║  %-57s║%s\n" "$BOLD" "$CYAN" "Filter: $FILTER" "$RESET"
 fi
 printf "%s%s╚════════════════════════════════════════════════════════════╝%s\n" "$BOLD" "$CYAN" "$RESET"
 
 if [[ ! -f "$SCRIPT" ]]; then
-    printf "%sERROR: pr_review.sh not found at %s%s\n" "$RED" "$SCRIPT" "$RESET"
+    printf "%sERROR: reviewer.sh not found at %s%s\n" "$RED" "$SCRIPT" "$RESET"
     exit 1
 fi
 
@@ -254,7 +254,7 @@ if section "Argument Parsing"; then
     assert_exit_code "--no-color accepted" "$exit_code" 0
 
     # Verify all documented flags appear in help
-    for flag in --repo --dir --env-files --model --max-turns --output --cleanup \
+    for flag in --repo --dir --env-files --model --teammate-model --max-turns --output --cleanup \
                 --no-teams --no-skip-permissions --no-env-copy --no-color --tabs; do
         assert_contains "Help mentions $flag" "$output" "$flag"
     done
@@ -351,39 +351,35 @@ if section "Helper Functions"; then
         BLUE=$'\033[0;94m'; CYAN=$'\033[0;36m'; BOLD=$'\033[1m'
         DIM=$'\033[2m'; RESET=$'\033[0m'
         ESC=$'\033'
-        eval "$(grep -A1 '^info()\|^ok()\|^warn()\|^error()\|^step()\|^_boxln()' "$SCRIPT" | grep -v '^--$')"
+        eval "$(grep -A1 '^info()\|^ok()\|^warn()\|^error()\|^step()' "$SCRIPT" | grep -v '^--$')"
 
-        # Test each function
+        # Test each function — uses Unicode symbols (● ✓ ⚠ ✖ ▸)
         info_out=$(info "test message" 2>&1)
-        [[ "$info_out" == *"[INFO]"* && "$info_out" == *"test message"* && "$info_out" == *"$ESC"* ]] \
+        [[ "$info_out" == *"●"* && "$info_out" == *"test message"* && "$info_out" == *"$ESC"* ]] \
             && echo "info:OK" || echo "info:FAIL"
 
         ok_out=$(ok "success" 2>&1)
-        [[ "$ok_out" == *"[OK]"* && "$ok_out" == *"$ESC"* ]] \
+        [[ "$ok_out" == *"✓"* && "$ok_out" == *"$ESC"* ]] \
             && echo "ok:OK" || echo "ok:FAIL"
 
         warn_out=$(warn "careful" 2>&1)
-        [[ "$warn_out" == *"[WARN]"* ]] && echo "warn:OK" || echo "warn:FAIL"
+        [[ "$warn_out" == *"⚠"* ]] && echo "warn:OK" || echo "warn:FAIL"
 
         error_out=$(error "failure" 2>&1)
-        [[ "$error_out" == *"[ERROR]"* ]] && echo "error:OK" || echo "error:FAIL"
+        [[ "$error_out" == *"✖"* ]] && echo "error:OK" || echo "error:FAIL"
 
         step_out=$(step "phase" 2>&1)
         [[ "$step_out" == *"phase"* && "$step_out" == *"▸"* ]] \
             && echo "step:OK" || echo "step:FAIL"
 
-        box_out=$(_boxln "║ test ║" 2>&1)
-        [[ "$box_out" == *"test"* && "$box_out" == *"$ESC"* ]] \
-            && echo "boxln:OK" || echo "boxln:FAIL"
-
         # Test with empty colors (NO_COLOR simulation)
         RED=''; GREEN=''; YELLOW=''; BLUE=''; CYAN=''; BOLD=''; DIM=''; RESET=''
         eval "$(grep -A1 '^info()\|^ok()' "$SCRIPT" | grep -v '^--$')"
         plain_info=$(info "plain" 2>&1)
-        [[ "$plain_info" == *"[INFO]"* && "$plain_info" != *"$ESC"* ]] \
+        [[ "$plain_info" == *"●"* && "$plain_info" != *"$ESC"* ]] \
             && echo "nocolor_info:OK" || echo "nocolor_info:FAIL"
         plain_ok=$(ok "plain" 2>&1)
-        [[ "$plain_ok" == *"[OK]"* && "$plain_ok" != *"$ESC"* ]] \
+        [[ "$plain_ok" == *"✓"* && "$plain_ok" != *"$ESC"* ]] \
             && echo "nocolor_ok:OK" || echo "nocolor_ok:FAIL"
 
         # Test backslash safety: %s should NOT interpret \n
@@ -394,7 +390,7 @@ if section "Helper Functions"; then
             && echo "backslash_safe:OK" || echo "backslash_safe:FAIL"
     )
 
-    for fn in info ok warn error step boxln nocolor_info nocolor_ok backslash_safe; do
+    for fn in info ok warn error step nocolor_info nocolor_ok backslash_safe; do
         result=$(echo "$helper_results" | grep "^${fn}:" | cut -d: -f2)
         case "$fn" in
             nocolor_info) assert "info() works with empty colors" "$result" "OK" ;;
@@ -442,26 +438,24 @@ if section "Color Rendering (iTerm2)"; then
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  11. BOX ALIGNMENT (behavioral)
+#  11. VISUAL STRUCTURE (thin-line rules)
 # ═══════════════════════════════════════════════════════════════════════════
-if section "Box Alignment"; then
-    # Extract all _boxln lines and verify consistent width
-    box_widths=$(grep '_boxln "' "$SCRIPT" | sed 's/.*_boxln "//;s/".*//' | while read -r line; do
-        echo "${#line}"
-    done | sort -u)
-    unique_widths=$(echo "$box_widths" | wc -l | tr -d ' ')
-    assert "All _boxln lines same width" "$unique_widths" "1"
+if section "Visual Structure"; then
+    script_content=$(cat "$SCRIPT")
 
-    # Verify the consistent width value (62 = ╔ + 60 ═ + ╗)
-    box_width=$(echo "$box_widths" | head -1)
-    assert "Box width is 62 chars" "$box_width" "62"
+    # Uses modern thin-line rules (───) not heavy box-drawing (╔═╗║╚═╝)
+    assert_contains "Uses thin-line rules" "$script_content" "───"
+    assert_not_contains "No heavy box top" "$script_content" "╔═══"
+    assert_not_contains "No heavy box bottom" "$script_content" "╚═══"
 
-    # Verify printf dynamic lines use matching format width
-    dynamic_box_lines=$(grep 'printf.*║.*%-[0-9]' "$SCRIPT" | grep -oE '%-[0-9]+s' | sort -u)
-    for spec in $dynamic_box_lines; do
-        width=$(echo "$spec" | grep -oE '[0-9]+')
-        assert "Dynamic box content width ($spec) fits" "$(( width <= 57 ? 1 : 0 ))" "1"
-    done
+    # Status functions use Unicode symbols
+    assert_contains "info() uses ● symbol" "$(grep '^info()' "$SCRIPT")" "●"
+    assert_contains "ok() uses ✓ symbol" "$(grep '^ok()' "$SCRIPT")" "✓"
+    assert_contains "warn() uses ⚠ symbol" "$(grep '^warn()' "$SCRIPT")" "⚠"
+    assert_contains "error() uses ✖ symbol" "$(grep '^error()' "$SCRIPT")" "✖"
+
+    # Banner uses ◆ diamond
+    assert_contains "Banner uses ◆ symbol" "$script_content" "◆ reviewer"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -499,7 +493,6 @@ if section "Parallel Mode"; then
 
     assert_contains "PR diff command is pdiff" "$(grep 'pdiff()' "$SCRIPT")" "pdiff()"
     assert_not_contains "No diff() shadow" "$(grep -w 'diff()' "$SCRIPT")" "diff()"
-    assert_contains "Has _boxln() helper" "$(grep '_boxln()' "$SCRIPT")" "_boxln()"
 
     # Verify header comment matches RC file (pdiff not diff)
     header_section=$(head -200 "$SCRIPT")
@@ -527,7 +520,7 @@ if section "Integration: Env File Copy"; then
     echo "API_KEY=xxx" > "$GIT_ROOT/services/api/.env"
 
     # Create a worktree-like destination (outside GIT_ROOT's parent to avoid early return)
-    WORKTREE_BASE=$(mktemp -d /tmp/pr-review-wt-XXXXXX)
+    WORKTREE_BASE=$(mktemp -d /tmp/reviewer-wt-XXXXXX)
     WORKTREE="$WORKTREE_BASE/worktree"
     mkdir -p "$WORKTREE"
 
@@ -623,6 +616,118 @@ if section "Integration: Prompt Template"; then
     # Verify the review has all 4 specialist roles
     for role in "code-quality" "security" "logic" "architecture"; do
         assert_contains "Template includes $role reviewer" "$template_section" "$role"
+    done
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  17. TEAMMATE MODEL FLAG
+# ═══════════════════════════════════════════════════════════════════════════
+if section "Teammate Model Flag"; then
+    script_content=$(cat "$SCRIPT")
+
+    # Help text mentions the flag
+    help_output=$(bash "$SCRIPT" --help 2>&1 || true)
+    assert_contains "--teammate-model in help" "$help_output" "--teammate-model"
+    assert_contains "-tm in help" "$help_output" "-tm"
+
+    # Default variable exists
+    assert_contains "TEAMMATE_MODEL default variable" "$script_content" 'TEAMMATE_MODEL=""'
+
+    # Argument parsing case exists
+    assert_contains "Parsing case for -tm|--teammate-model" "$script_content" '-tm|--teammate-model)'
+
+    # Inheritance logic: defaults to MODEL when unset
+    assert_contains "Inheritance resolves TEAMMATE_MODEL from MODEL" "$script_content" '[[ -z "$TEAMMATE_MODEL" ]] && TEAMMATE_MODEL="$MODEL"'
+
+    # Passthrough handles the flag
+    assert_contains "Passthrough passes --teammate-model" "$script_content" '--teammate-model'
+
+    # Subagent JSON uses __TEAMMATE_MODEL__ placeholder (not hardcoded "opus")
+    agents_section=$(sed -n '/AGENTS_JSON/,/^AGENTS$/p' "$SCRIPT")
+    assert_contains "Subagent JSON uses __TEAMMATE_MODEL__ placeholder" "$agents_section" '__TEAMMATE_MODEL__'
+    assert_not_contains "Subagent JSON does not hardcode opus" "$agents_section" '"model": "opus"'
+
+    # Heredoc is quoted (safe against accidental $ expansion)
+    assert_contains "Heredoc uses quoted delimiter" "$agents_section" "<<'AGENTS'"
+
+    # Placeholder is substituted after heredoc
+    assert_contains "Placeholder substituted after heredoc" "$script_content" 'AGENTS_JSON="${AGENTS_JSON//__TEAMMATE_MODEL__/$TEAMMATE_MODEL}"'
+
+    # Agent Teams mode has teammate model prompt section
+    assert_contains "Agent Teams prompt includes Teammate Model section" "$script_content" '## Teammate Model'
+
+    # Config display line handles teammate model
+    assert_contains "Config line shows teammates when different" "$script_content" '(teammates: ${TEAMMATE_MODEL})'
+
+    # Behavioral: --teammate-model sonnet --help exits cleanly
+    tm_help_output=$(bash "$SCRIPT" --teammate-model sonnet --help 2>&1)
+    tm_help_exit=$?
+    assert "--teammate-model sonnet --help exits 0" "$tm_help_exit" "0"
+
+    # Behavioral: -tm sonnet --help exits cleanly
+    tm_short_help_output=$(bash "$SCRIPT" -tm sonnet --help 2>&1)
+    tm_short_help_exit=$?
+    assert "-tm sonnet --help exits 0" "$tm_short_help_exit" "0"
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  18. MODEL VALIDATION
+# ═══════════════════════════════════════════════════════════════════════════
+if section "Model Validation"; then
+    script_content=$(cat "$SCRIPT")
+
+    # Structural: validation function exists
+    assert_contains "_validate_model function exists" "$script_content" '_validate_model()'
+    assert_contains "VALID_MODELS list defined" "$script_content" 'VALID_MODELS='
+
+    # Behavioral: valid models accepted
+    for model in opus sonnet haiku; do
+        output=$(bash "$SCRIPT" --model "$model" --help 2>&1)
+        exit_code=$?
+        assert_exit_code "--model $model accepted" "$exit_code" 0
+    done
+
+    # Behavioral: invalid model rejected (PR number required to reach validation)
+    output=$(bash "$SCRIPT" 42 --model snonet 2>&1)
+    exit_code=$?
+    assert "Invalid --model exits non-zero" "$(( exit_code != 0 ? 1 : 0 ))" "1"
+    assert_contains "Invalid --model names the bad value" "$output" "snonet"
+
+    # Behavioral: invalid teammate model rejected
+    output=$(bash "$SCRIPT" 42 --teammate-model bogus 2>&1)
+    exit_code=$?
+    assert "Invalid --teammate-model exits non-zero" "$(( exit_code != 0 ? 1 : 0 ))" "1"
+    assert_contains "Invalid --teammate-model names the bad value" "$output" "bogus"
+
+    # Behavioral: valid teammate model accepted (--help exits before validation)
+    output=$(bash "$SCRIPT" --teammate-model haiku --help 2>&1)
+    exit_code=$?
+    assert_exit_code "--teammate-model haiku --help accepted" "$exit_code" 0
+fi
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  19. MISSING ARGUMENT GUARD
+# ═══════════════════════════════════════════════════════════════════════════
+if section "Missing Argument Guard"; then
+    script_content=$(cat "$SCRIPT")
+
+    # Structural: _need_arg helper exists
+    assert_contains "_need_arg helper exists" "$script_content" '_need_arg()'
+
+    # Behavioral: each shift-2 flag produces a clean error when value is missing
+    for flag in --repo --dir --env-files --model --teammate-model --max-turns --output --tabs; do
+        output=$(bash "$SCRIPT" 42 "$flag" 2>&1)
+        exit_code=$?
+        assert "Missing value for $flag exits non-zero" "$(( exit_code != 0 ? 1 : 0 ))" "1"
+        assert_contains "$flag missing-value error is clear" "$output" "requires a value"
+    done
+
+    # Behavioral: short forms too
+    for flag in -r -d -e -m -tm -b -o; do
+        output=$(bash "$SCRIPT" 42 "$flag" 2>&1)
+        exit_code=$?
+        assert "Missing value for $flag exits non-zero" "$(( exit_code != 0 ? 1 : 0 ))" "1"
+        assert_contains "$flag missing-value error is clear" "$output" "requires a value"
     done
 fi
 

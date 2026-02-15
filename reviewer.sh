@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  pr_review.sh — AI-powered PR code review with Claude Code agent teams
+#  reviewer.sh — AI-powered PR code review with Claude Code agent teams
 # ============================================================================
 #
-#  Usage:  pr_review.sh <PR_NUMBER...> [OPTIONS]
+#  Usage:  reviewer.sh <PR_NUMBER...> [OPTIONS]
 #
-#  Checks out a PR into an isolated git worktree (~/.pr_reviewer/pr-<N>/),
+#  Checks out a PR into an isolated git worktree (~/.reviewer/pr-<N>/),
 #  copies untracked env/config files so tests work, then launches Claude Code
 #  with 4 specialist reviewers (code quality, security, logic, architecture).
 #
@@ -38,21 +38,20 @@ else
     RED=''; GREEN=''; YELLOW=''; BLUE=''; CYAN=''; BOLD=''; DIM=''; RESET=''
 fi
 
-info()  { printf "%s[INFO]%s  %s\n" "$BLUE" "$RESET" "$*"; }
-ok()    { printf "%s[OK]%s    %s\n" "$GREEN" "$RESET" "$*"; }
-warn()  { printf "%s[WARN]%s  %s\n" "$YELLOW" "$RESET" "$*"; }
-error() { printf "%s[ERROR]%s %s\n" "$RED" "$RESET" "$*" >&2; }
+info()  { printf "  %s●%s  %s\n" "$BLUE" "$RESET" "$*"; }
+ok()    { printf "  %s✓%s  %s\n" "$GREEN" "$RESET" "$*"; }
+warn()  { printf "  %s⚠%s  %s\n" "$YELLOW" "$RESET" "$*"; }
+error() { printf "  %s✖%s  %s\n" "$RED" "$RESET" "$*" >&2; }
 fatal() { error "$@"; exit 1; }
-step()  { printf "\n%s%s▸ %s%s\n" "$CYAN" "$BOLD" "$*" "$RESET"; }
+step()  { printf "\n  %s%s▸ %s%s\n" "$CYAN" "$BOLD" "$*" "$RESET"; }
 
-# Box-line helper: prints a single line wrapped in BOLD+CYAN, with RESET.
-_boxln() { printf "%s%s%s%s\n" "$BOLD" "$CYAN" "$1" "$RESET"; }
 
 # ── Defaults ────────────────────────────────────────────────────────────────
 PR_NUMBERS=()
 REPO=""
 WORKTREE_PARENT=""
 MODEL="opus"
+TEAMMATE_MODEL=""       # Default: inherit lead model
 MAX_TURNS="50"
 OUTPUT_FILE=""
 CLEANUP=false
@@ -80,94 +79,101 @@ ENV_COPY_MAX_SIZE=$((5 * 1024 * 1024))  # 5 MB per file
 
 # ── Parse arguments ─────────────────────────────────────────────────────────
 usage() {
-    cat <<'HELPTEXT'
-pr_review.sh — AI-powered code review with Claude Code agent teams
-
-USAGE
-  pr_review.sh <PR_NUMBER...> [OPTIONS]
-
-  Run from inside any git repo with a GitHub remote. The script auto-detects
-  the repository, fetches the PR, and creates an isolated worktree.
-
-EXAMPLES
-  pr_review.sh 42                              # review a PR
-  pr_review.sh 42 43 44                        # three PRs in parallel tabs
-  pr_review.sh 42 --max-turns 75 --cleanup     # deeper review, auto-cleanup
-  pr_review.sh 42 -o review.md                 # save to file (non-interactive)
-  pr_review.sh 42 --repo myorg/myrepo          # review a PR from another repo
-  pr_review.sh 42 -e ".env.staging" --no-teams # custom env, subagent mode
-  NO_COLOR=1 pr_review.sh 42 -o out.md         # plain output for CI pipelines
-
-OPTIONS
-  Core
-    -r, --repo <owner/repo>  Target repository (default: auto-detected)
-    -m, --model <model>      Claude model for lead agent (default: opus)
-    -b, --max-turns <N>      Max agentic turns per PR (default: 50, range: 30–75)
-    -h, --help               Show this help
-
-  Output
-    -o, --output <path>      Write review to file (non-interactive, single-PR)
-    -c, --cleanup            Remove worktree after review completes
-    --no-color               Disable colors (also: NO_COLOR=1, PR_REVIEW_NO_COLOR=1)
-
-  Agent
-    -t, --no-teams           Use subagents instead of agent teams
-    --no-skip-permissions    Require manual approval for each tool use
-
-  Environment
-    -e, --env-files <globs>  Extra file patterns to copy (comma-separated)
-                             Example: -e ".env.staging,config/local.yml"
-    --no-env-copy            Skip copying .env and config files into worktree
-
-  Terminal
-    -d, --dir <path>         Worktree parent directory (default: ~/.pr_reviewer/)
-    --tabs <mode>            Parallel mode: auto | iterm | tmux | bg
-
-PARALLEL REVIEWS
-  Pass 2+ PR numbers and the terminal is auto-detected:
-
-    iTerm2    Named tabs, navigate with ⌘+←/→ or ⌘+1-9
-    tmux      Named windows in a session, Ctrl+B n/p or Ctrl+B w
-    Other     Background processes with live status dashboard
-
-  Override: pr_review.sh 42 43 --tabs tmux
-
-  Each completed tab provides quick commands:
-    review    Re-display the review      pdiff    View the PR diff
-    files     PR metadata & file list    exit     Close the tab
-
-ENVIRONMENT FILES
-  Git worktrees only contain tracked files. The script copies common untracked
-  files (.env, .npmrc, config/master.key, …) so tests and builds work.
-  Add custom patterns: -e ".env.staging,secrets/local.json"
-  Skip entirely: --no-env-copy
-  Manifest: ~/.pr_reviewer/pr-<N>/.pr-review-context/env-files-copied.log
-
-OUTPUT
-  Reviews are saved to: ~/.pr_reviewer/pr-<N>/.pr-review-context/REVIEW.md
-  With -o <path>, also written to the specified file.
-
-REQUIREMENTS
-  brew install gh jq claude && gh auth login
-HELPTEXT
+    local B="$BOLD" C="$CYAN" D="$DIM" G="$GREEN" R="$RESET"
+    printf "\n"
+    printf "  %s%s◆ reviewer%s  %s· AI-powered code review with Claude%s\n" "$B" "$C" "$R" "$D" "$R"
+    printf "\n"
+    printf "  %s%sUSAGE%s\n" "$B" "$C" "$R"
+    printf "    reviewer.sh <PR_NUMBER...> [OPTIONS]\n"
+    printf "\n"
+    printf "    Run from inside any git repo with a GitHub remote. The script auto-detects\n"
+    printf "    the repository, fetches the PR, and creates an isolated worktree.\n"
+    printf "\n"
+    printf "  %s%sEXAMPLES%s\n" "$B" "$C" "$R"
+    printf "    %sreviewer.sh 42%s                                %s# review a PR%s\n"                    "$B" "$R" "$D" "$R"
+    printf "    %sreviewer.sh 42 43 44%s                          %s# three PRs in parallel tabs%s\n"     "$B" "$R" "$D" "$R"
+    printf "    %sreviewer.sh 42 --max-turns 75 --cleanup%s       %s# deeper review, auto-cleanup%s\n"    "$B" "$R" "$D" "$R"
+    printf "    %sreviewer.sh 42 -o review.md%s                   %s# save to file (non-interactive)%s\n" "$B" "$R" "$D" "$R"
+    printf "    %sreviewer.sh 42 --repo myorg/myrepo%s            %s# review a PR from another repo%s\n"  "$B" "$R" "$D" "$R"
+    printf "    %sreviewer.sh 42 -m opus -tm sonnet%s             %s# opus lead, sonnet teammates%s\n"    "$B" "$R" "$D" "$R"
+    printf "    %sreviewer.sh 42 -e \".env.staging\" --no-teams%s   %s# custom env, subagent mode%s\n"    "$B" "$R" "$D" "$R"
+    printf "    %sNO_COLOR=1 reviewer.sh 42 -o out.md%s           %s# plain output for CI pipelines%s\n"  "$B" "$R" "$D" "$R"
+    printf "\n"
+    printf "  %s%sOPTIONS%s\n" "$B" "$C" "$R"
+    printf "    %sCore%s\n" "$D" "$R"
+    printf "      %s-r, --repo%s <owner/repo>  Target repository %s(default: auto-detected)%s\n"        "$B" "$R" "$D" "$R"
+    printf "      %s-m, --model%s <model>      Claude model for lead agent %s(default: opus)%s\n"       "$B" "$R" "$D" "$R"
+    printf "      %s-tm, --teammate-model%s <model>\n"                                                  "$B" "$R"
+    printf "                               Model for teammate agents %s(default: same as --model)%s\n"  "$D" "$R"
+    printf "      %s-b, --max-turns%s <N>      Max agentic turns per PR %s(default: 50, range: 30–75)%s\n" "$B" "$R" "$D" "$R"
+    printf "      %s-h, --help%s               Show this help\n"                                        "$B" "$R"
+    printf "\n"
+    printf "    %sOutput%s\n" "$D" "$R"
+    printf "      %s-o, --output%s <path>      Write review to file %s(non-interactive, single-PR)%s\n" "$B" "$R" "$D" "$R"
+    printf "      %s-c, --cleanup%s            Remove worktree after review completes\n"                "$B" "$R"
+    printf "      %s--no-color%s               Disable colors %s(also: NO_COLOR=1, PR_REVIEW_NO_COLOR=1)%s\n" "$B" "$R" "$D" "$R"
+    printf "\n"
+    printf "    %sAgent%s\n" "$D" "$R"
+    printf "      %s-t, --no-teams%s           Use subagents instead of agent teams\n"                  "$B" "$R"
+    printf "      %s--no-skip-permissions%s    Require manual approval for each tool use\n"             "$B" "$R"
+    printf "\n"
+    printf "    %sEnvironment%s\n" "$D" "$R"
+    printf "      %s-e, --env-files%s <globs>  Extra file patterns to copy %s(comma-separated)%s\n"     "$B" "$R" "$D" "$R"
+    printf "                               Example: -e \".env.staging,config/local.yml\"\n"
+    printf "      %s--no-env-copy%s            Skip copying .env and config files into worktree\n"      "$B" "$R"
+    printf "\n"
+    printf "    %sTerminal%s\n" "$D" "$R"
+    printf "      %s-d, --dir%s <path>         Worktree parent directory %s(default: ~/.reviewer/)%s\n" "$B" "$R" "$D" "$R"
+    printf "      %s--tabs%s <mode>            Parallel mode: auto | iterm | tmux | bg\n"               "$B" "$R"
+    printf "\n"
+    printf "  %s%sPARALLEL REVIEWS%s\n" "$B" "$C" "$R"
+    printf "    Pass 2+ PR numbers and the terminal is auto-detected:\n"
+    printf "\n"
+    printf "      %siTerm2%s    Named tabs, navigate with %s⌘+←/→%s or %s⌘+1-9%s\n"                   "$G" "$R" "$B" "$R" "$B" "$R"
+    printf "      %stmux%s      Named windows in a session, %sCtrl+B n/p%s or %sCtrl+B w%s\n"          "$G" "$R" "$B" "$R" "$B" "$R"
+    printf "      %sOther%s     Background processes with live status dashboard\n"                      "$G" "$R"
+    printf "\n"
+    printf "    Override: %sreviewer.sh 42 43 --tabs tmux%s\n" "$B" "$R"
+    printf "\n"
+    printf "    Each completed tab provides quick commands:\n"
+    printf "      %sreview%s    Re-display the review      %spdiff%s    View the PR diff\n"             "$B" "$R" "$B" "$R"
+    printf "      %sfiles%s     PR metadata & file list    %sexit%s     Close the tab\n"                "$B" "$R" "$B" "$R"
+    printf "\n"
+    printf "  %s%sENVIRONMENT FILES%s\n" "$B" "$C" "$R"
+    printf "    Git worktrees only contain tracked files. The script copies common untracked\n"
+    printf "    files (.env, .npmrc, config/master.key, …) so tests and builds work.\n"
+    printf "    Add custom patterns: %s-e \".env.staging,secrets/local.json\"%s\n" "$B" "$R"
+    printf "    Skip entirely: %s--no-env-copy%s\n" "$B" "$R"
+    printf "    Manifest: %s~/.reviewer/pr-<N>/.pr-review-context/env-files-copied.log%s\n" "$D" "$R"
+    printf "\n"
+    printf "  %s%sOUTPUT%s\n" "$B" "$C" "$R"
+    printf "    Reviews are saved to: %s~/.reviewer/pr-<N>/.pr-review-context/REVIEW.md%s\n" "$D" "$R"
+    printf "    With %s-o <path>%s, also written to the specified file.\n" "$B" "$R"
+    printf "\n"
+    printf "  %s%sREQUIREMENTS%s\n" "$B" "$C" "$R"
+    printf "    brew install gh jq claude && gh auth login\n"
+    printf "\n"
     exit 0
 }
+
+_need_arg() { [[ $# -ge 2 && -n "${2:-}" ]] || fatal "$1 requires a value"; }
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)             usage ;;
-        -r|--repo)             REPO="$2"; shift 2 ;;
-        -d|--dir)              WORKTREE_PARENT="$2"; shift 2 ;;
-        -e|--env-files)        EXTRA_ENV_PATTERNS="$2"; shift 2 ;;
-        -m|--model)            MODEL="$2"; shift 2 ;;
-        -b|--max-turns)         MAX_TURNS="$2"; shift 2 ;;
-        -o|--output)           OUTPUT_FILE="$2"; shift 2 ;;
+        -r|--repo)             _need_arg "$@"; REPO="$2"; shift 2 ;;
+        -d|--dir)              _need_arg "$@"; WORKTREE_PARENT="$2"; shift 2 ;;
+        -e|--env-files)        _need_arg "$@"; EXTRA_ENV_PATTERNS="$2"; shift 2 ;;
+        -m|--model)            _need_arg "$@"; MODEL="$2"; shift 2 ;;
+        -tm|--teammate-model)  _need_arg "$@"; TEAMMATE_MODEL="$2"; shift 2 ;;
+        -b|--max-turns)        _need_arg "$@"; MAX_TURNS="$2"; shift 2 ;;
+        -o|--output)           _need_arg "$@"; OUTPUT_FILE="$2"; shift 2 ;;
         -c|--cleanup)          CLEANUP=true; shift ;;
         -t|--no-teams)         USE_TEAMS=false; shift ;;
         --no-skip-permissions) SKIP_PERMISSIONS=false; shift ;;
         --no-env-copy)         COPY_ENV=false; shift ;;
         --no-color)            export NO_COLOR=1; RED=''; GREEN=''; YELLOW=''; BLUE=''; CYAN=''; BOLD=''; DIM=''; RESET=''; shift ;;
-        --tabs)                TAB_MODE="$2"; shift 2 ;;
+        --tabs)                _need_arg "$@"; TAB_MODE="$2"; shift 2 ;;
         --_single)             _SINGLE_MODE=true; shift ;;
         -*)                    fatal "Unknown option: $1  (use --help)" ;;
         *)
@@ -179,12 +185,25 @@ while [[ $# -gt 0 ]]; do
             fi ;;
     esac
 done
+[[ -z "$TEAMMATE_MODEL" ]] && TEAMMATE_MODEL="$MODEL"
 [[ ${#PR_NUMBERS[@]} -eq 0 ]] && fatal "Missing required argument: PR number(s). Usage: $(basename "$0") <PR_NUMBER...> [OPTIONS]"
+
+# ── Validate model names ──────────────────────────────────────────────────
+VALID_MODELS="opus sonnet haiku"
+_validate_model() {
+    local flag="$1" value="$2"
+    # shellcheck disable=SC2076
+    if [[ ! " $VALID_MODELS " =~ " $value " ]]; then
+        fatal "Invalid model for $flag: '${value}'. Valid models: ${VALID_MODELS}"
+    fi
+}
+_validate_model "--model" "$MODEL"
+_validate_model "--teammate-model" "$TEAMMATE_MODEL"
 
 # ── Opening banner (shown once, before any work) ─────────────────────────
 if [[ "$_SINGLE_MODE" == false ]]; then
     echo ""
-    printf "%s%s  pr-review.sh%s  %s— AI-powered code review%s\n" "$BOLD" "$CYAN" "$RESET" "$DIM" "$RESET"
+    printf "  %s%s◆ reviewer%s  %s· AI-powered code review with Claude%s\n" "$BOLD" "$CYAN" "$RESET" "$DIM" "$RESET"
 fi
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -203,6 +222,7 @@ if [[ ${#PR_NUMBERS[@]} -gt 1 && "$_SINGLE_MODE" == false ]]; then
     [[ -n "$WORKTREE_PARENT" ]]   && PASSTHROUGH_ARGS+=("--dir" "$WORKTREE_PARENT")
     [[ -n "$EXTRA_ENV_PATTERNS" ]]&& PASSTHROUGH_ARGS+=("--env-files" "$EXTRA_ENV_PATTERNS")
     [[ "$MODEL" != "opus" ]]    && PASSTHROUGH_ARGS+=("--model" "$MODEL")
+    [[ "$TEAMMATE_MODEL" != "$MODEL" ]] && PASSTHROUGH_ARGS+=("--teammate-model" "$TEAMMATE_MODEL")
     [[ "$MAX_TURNS" != "50" ]]     && PASSTHROUGH_ARGS+=("--max-turns" "$MAX_TURNS")
     [[ "$CLEANUP" == true ]]      && PASSTHROUGH_ARGS+=("--cleanup")
     [[ "$USE_TEAMS" == false ]]   && PASSTHROUGH_ARGS+=("--no-teams")
@@ -281,17 +301,17 @@ APPLESCRIPT
         done
 
         echo ""
-        _boxln "╔════════════════════════════════════════════════════════════╗"
-        printf "%s%s║  %-57s║%s\n" "$BOLD" "$CYAN" "${#PR_NUMBERS[@]} reviews launched in iTerm2 tabs" "$RESET"
-        _boxln "║                                                            ║"
-        _boxln "║  Navigation:                                               ║"
-        _boxln "║    ⌘ + ←/→           Switch between tabs                   ║"
-        _boxln "║    ⌘ + 1-9           Jump to tab by number                 ║"
-        _boxln "║    ⌘ + Shift + ]     Next tab                              ║"
-        _boxln "╚════════════════════════════════════════════════════════════╝"
+        printf "  %s%s───────────────────────────────────────────────────────%s\n" "$BOLD" "$CYAN" "$RESET"
+        printf "  %s%s  ${#PR_NUMBERS[@]} reviews launched in iTerm2 tabs%s\n" "$BOLD" "$GREEN" "$RESET"
+        echo ""
+        printf "  %sNavigation:%s\n" "$DIM" "$RESET"
+        printf "    %s⌘ + ←/→%s         Switch between tabs\n" "$BOLD" "$RESET"
+        printf "    %s⌘ + 1-9%s         Jump to tab by number\n" "$BOLD" "$RESET"
+        printf "    %s⌘ + Shift + ]%s   Next tab\n" "$BOLD" "$RESET"
+        printf "  %s%s───────────────────────────────────────────────────────%s\n" "$BOLD" "$CYAN" "$RESET"
         echo ""
         for i in "${!PR_NUMBERS[@]}"; do
-            printf "  Tab %d: %sPR #%s%s — %s\n" "$((i+1))" "$BOLD" "${PR_NUMBERS[$i]}" "$RESET" "${PR_TITLES[${PR_NUMBERS[$i]}]}"
+            printf "    %s%s%d%s  PR #%s%s%s — %s%s\n" "$DIM" "$CYAN" "$((i+1))" "$RESET" "$BOLD" "${PR_NUMBERS[$i]}" "$RESET" "${PR_TITLES[${PR_NUMBERS[$i]}]}" "$RESET"
         done
         exit 0
 
@@ -321,18 +341,18 @@ APPLESCRIPT
         done
 
         echo ""
-        _boxln "╔════════════════════════════════════════════════════════════╗"
-        printf "%s%s║  %-57s║%s\n" "$BOLD" "$CYAN" "${#PR_NUMBERS[@]} reviews in tmux: ${SESSION_NAME}" "$RESET"
-        _boxln "║                                                            ║"
-        _boxln "║  Navigation:                                               ║"
-        _boxln "║    Ctrl+B  n         Next window                           ║"
-        _boxln "║    Ctrl+B  p         Previous window                       ║"
-        _boxln "║    Ctrl+B  0-9       Jump to window by number              ║"
-        _boxln "║    Ctrl+B  w         Interactive window picker             ║"
-        _boxln "╚════════════════════════════════════════════════════════════╝"
+        printf "  %s%s───────────────────────────────────────────────────────%s\n" "$BOLD" "$CYAN" "$RESET"
+        printf "  %s%s  ${#PR_NUMBERS[@]} reviews in tmux: ${SESSION_NAME}%s\n" "$BOLD" "$GREEN" "$RESET"
+        echo ""
+        printf "  %sNavigation:%s\n" "$DIM" "$RESET"
+        printf "    %sCtrl+B  n%s       Next window\n" "$BOLD" "$RESET"
+        printf "    %sCtrl+B  p%s       Previous window\n" "$BOLD" "$RESET"
+        printf "    %sCtrl+B  0-9%s     Jump to window by number\n" "$BOLD" "$RESET"
+        printf "    %sCtrl+B  w%s       Interactive window picker\n" "$BOLD" "$RESET"
+        printf "  %s%s───────────────────────────────────────────────────────%s\n" "$BOLD" "$CYAN" "$RESET"
         echo ""
         for i in "${!PR_NUMBERS[@]}"; do
-            printf "  Window %d: %sPR #%s%s — %s\n" "$i" "$BOLD" "${PR_NUMBERS[$i]}" "$RESET" "${PR_TITLES[${PR_NUMBERS[$i]}]}"
+            printf "    %s%s%d%s  PR #%s%s%s — %s%s\n" "$DIM" "$CYAN" "$i" "$RESET" "$BOLD" "${PR_NUMBERS[$i]}" "$RESET" "${PR_TITLES[${PR_NUMBERS[$i]}]}" "$RESET"
         done
         echo ""
 
@@ -351,7 +371,7 @@ APPLESCRIPT
     elif [[ "$RESOLVED_TAB_MODE" == "bg" ]]; then
         ok "Launching ${#PR_NUMBERS[@]} reviews as background processes"
 
-        LOG_DIR="${WORKTREE_PARENT:-${HOME}/.pr_reviewer}"
+        LOG_DIR="${WORKTREE_PARENT:-${HOME}/.reviewer}"
         mkdir -p "$LOG_DIR"
 
         declare -A BG_PIDS
@@ -364,11 +384,11 @@ APPLESCRIPT
         done
 
         echo ""
-        _boxln "╔════════════════════════════════════════════════════════════╗"
-        printf "%s%s║  %-57s║%s\n" "$BOLD" "$CYAN" "${#PR_NUMBERS[@]} reviews running in background" "$RESET"
-        _boxln "║                                                            ║"
-        _boxln "║  Tip: install iTerm2 or tmux for tabbed parallel reviews   ║"
-        _boxln "╚════════════════════════════════════════════════════════════╝"
+        printf "  %s%s───────────────────────────────────────────────────────%s\n" "$BOLD" "$CYAN" "$RESET"
+        printf "  %s%s  ${#PR_NUMBERS[@]} reviews running in background%s\n" "$BOLD" "$GREEN" "$RESET"
+        echo ""
+        printf "  %sTip: install iTerm2 or tmux for tabbed parallel reviews%s\n" "$DIM" "$RESET"
+        printf "  %s%s───────────────────────────────────────────────────────%s\n" "$BOLD" "$CYAN" "$RESET"
         echo ""
 
         # Live status watcher
@@ -503,7 +523,7 @@ if git rev-parse --git-dir &>/dev/null 2>&1; then
     GIT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || git rev-parse --git-dir)
 else
     info "Not inside a git repo. Cloning $REPO..."
-    CLONE_DIR="/tmp/pr-review-repos/$(echo "$REPO" | tr '/' '-')"
+    CLONE_DIR="/tmp/reviewer-repos/$(echo "$REPO" | tr '/' '-')"
     if [[ ! -d "$CLONE_DIR" ]]; then
         gh repo clone "$REPO" "$CLONE_DIR" -- --bare 2>/dev/null \
             || gh repo clone "$REPO" "$CLONE_DIR" 2>/dev/null \
@@ -512,9 +532,9 @@ else
     GIT_ROOT="$CLONE_DIR"
 fi
 
-# ── Worktree parent: ~/.pr_reviewer/ ────────────────────────────────────────
+# ── Worktree parent: ~/.reviewer/ ────────────────────────────────────────
 if [[ -z "$WORKTREE_PARENT" ]]; then
-    WORKTREE_PARENT="${HOME}/.pr_reviewer"
+    WORKTREE_PARENT="${HOME}/.reviewer"
 fi
 WORKTREE_PARENT=$(cd "$(dirname "$WORKTREE_PARENT")" 2>/dev/null \
     && echo "$(pwd)/$(basename "$WORKTREE_PARENT")" || echo "$WORKTREE_PARENT")
@@ -536,19 +556,19 @@ if [[ -n "$WT_RELPATH" && "$WT_RELPATH" != ..* ]]; then
         GIT_EXCLUDE="${GIT_ROOT}/.git/info/exclude"
         if [[ -f "$GIT_EXCLUDE" ]]; then
             if ! grep -qF "$IGNORE_ENTRY" "$GIT_EXCLUDE" 2>/dev/null; then
-                printf '\n# PR review worktrees (auto-added by pr-review.sh)\n%s\n' "$IGNORE_ENTRY" >> "$GIT_EXCLUDE"
+                printf '\n# PR review worktrees (auto-added by reviewer.sh)\n%s\n' "$IGNORE_ENTRY" >> "$GIT_EXCLUDE"
                 printf "       %sAdded worktree to git exclude%s\n" "$DIM" "$RESET"
             fi
         else
             mkdir -p "$(dirname "$GIT_EXCLUDE")"
-            printf '# PR review worktrees (auto-added by pr-review.sh)\n%s\n' "$IGNORE_ENTRY" > "$GIT_EXCLUDE"
+            printf '# PR review worktrees (auto-added by reviewer.sh)\n%s\n' "$IGNORE_ENTRY" > "$GIT_EXCLUDE"
             printf "       %sAdded worktree to git exclude%s\n" "$DIM" "$RESET"
         fi
         GITIGNORE_FILE="${GIT_ROOT}/.gitignore"
         if [[ -f "$GITIGNORE_FILE" ]]; then
             if ! grep -qF "$IGNORE_ENTRY" "$GITIGNORE_FILE" 2>/dev/null; then
                 [[ -s "$GITIGNORE_FILE" && "$(tail -c1 "$GITIGNORE_FILE")" != "" ]] && echo "" >> "$GITIGNORE_FILE"
-                printf '\n# PR review worktrees (auto-added by pr-review.sh)\n%s\n' "$IGNORE_ENTRY" >> "$GITIGNORE_FILE"
+                printf '\n# PR review worktrees (auto-added by reviewer.sh)\n%s\n' "$IGNORE_ENTRY" >> "$GITIGNORE_FILE"
                 info "Also added to .gitignore (commit at your convenience)"
             fi
         fi
@@ -804,50 +824,71 @@ CLAUDE_ENV=()
 AGENT_MODE="agent teams"
 if [[ "$USE_TEAMS" == true ]]; then
     CLAUDE_ENV+=("CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1")
+    REVIEW_PROMPT+="
+
+## Teammate Model
+
+IMPORTANT: When creating each teammate agent, you MUST specify the model \"${TEAMMATE_MODEL}\" for all teammates. Use the model parameter to set each teammate to \"${TEAMMATE_MODEL}\". Do not use any other model."
 else
     AGENT_MODE="subagents"
+    # Quoted heredoc prevents accidental expansion of $ in prompt strings.
+    # TEAMMATE_MODEL is substituted explicitly below.
     read -r -d '' AGENTS_JSON <<'AGENTS' || true
 {
   "code-quality-reviewer": {
     "description": "Analyzes code quality, readability, naming, DRY/SOLID, design patterns, code smells.",
     "prompt": "You are a senior code quality reviewer. Analyze the PR diff and source files. Focus on readability, naming, DRY/SOLID, design patterns, complexity. Run linters if available. Use 🔴/🟡/🟢/ℹ️. Diff at .pr-review-context/pr.diff.",
-    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "opus"
+    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "__TEAMMATE_MODEL__"
   },
   "security-reviewer": {
     "description": "Audits for security vulnerabilities, injection, auth, data exposure, OWASP Top 10.",
     "prompt": "You are a security reviewer. Audit for: injection, auth issues, data exposure, insecure defaults, missing validation, hardcoded secrets, OWASP Top 10. Use 🔴/🟡/🟢/ℹ️. Diff at .pr-review-context/pr.diff.",
-    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "opus"
+    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "__TEAMMATE_MODEL__"
   },
   "logic-reviewer": {
     "description": "Verifies business logic, edge cases, error handling, race conditions, tests.",
     "prompt": "You are a logic reviewer. Verify business logic, edge cases, error handling, race conditions, null safety, test coverage. Run the test suite. Use 🔴/🟡/🟢/ℹ️. Diff at .pr-review-context/pr.diff.",
-    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "opus"
+    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "__TEAMMATE_MODEL__"
   },
   "architecture-reviewer": {
     "description": "Evaluates architecture, API design, backward compat, performance, scalability.",
     "prompt": "You are an architecture reviewer. Evaluate architectural decisions, API design, backward compat, performance, scalability, dependency management. Use 🔴/🟡/🟢/ℹ️. Diff at .pr-review-context/pr.diff.",
-    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "opus"
+    "tools": ["Read", "Grep", "Glob", "Bash"], "model": "__TEAMMATE_MODEL__"
   }
 }
 AGENTS
+    AGENTS_JSON="${AGENTS_JSON//__TEAMMATE_MODEL__/$TEAMMATE_MODEL}"
     CLAUDE_ARGS+=("--agents" "$AGENTS_JSON")
 fi
 
 # ── Build the launch summary line ─────────────────────────────────────────
-REVIEW_CONFIG_LINE="4 reviewers · ${MODEL} · ${MAX_TURNS} turns · ${AGENT_MODE}"
+if [[ "$TEAMMATE_MODEL" != "$MODEL" ]]; then
+    REVIEW_CONFIG_LINE="4 reviewers · ${MODEL} (teammates: ${TEAMMATE_MODEL}) · ${MAX_TURNS} turns · ${AGENT_MODE}"
+else
+    REVIEW_CONFIG_LINE="4 reviewers · ${MODEL} · ${MAX_TURNS} turns · ${AGENT_MODE}"
+fi
 [[ "$SKIP_PERMISSIONS" == true ]] && REVIEW_CONFIG_LINE="${REVIEW_CONFIG_LINE} · autonomous"
 [[ -n "$OUTPUT_FILE" ]] && REVIEW_CONFIG_LINE="${REVIEW_CONFIG_LINE} · output → ${OUTPUT_FILE}"
 
 # ── Execute ────────────────────────────────────────────────────────────────
 echo ""
-_boxln "╔════════════════════════════════════════════════════════════╗"
+printf "  %s%s───────────────────────────────────────────────────────%s\n" "$BOLD" "$CYAN" "$RESET"
 echo ""
-printf "  %sPR #%s: %s%s\n" "$BOLD" "$PR_NUMBER" "$(echo "$PR_TITLE" | cut -c1-50)" "$RESET"
-printf "  %s@%s  ·  %s → %s  ·  +%s -%s  ·  %s file(s)%s\n" "$DIM" "$PR_AUTHOR" "$PR_HEAD" "$PR_BASE" "$PR_ADDS" "$PR_DELS" "$PR_FILES" "$RESET"
+printf "  %s%sPR #%s%s  %s%s\n" "$BOLD" "$CYAN" "$PR_NUMBER" "$RESET" "$BOLD$(echo "$PR_TITLE" | cut -c1-50)" "$RESET"
+printf "  %s@%s  ·  %s → %s  ·  %s+%s%s %s-%s%s  ·  %s file(s)%s\n" \
+    "$DIM" "$PR_AUTHOR" "$PR_HEAD" "$PR_BASE" \
+    "$GREEN" "$PR_ADDS" "$RESET$DIM" "$RED" "$PR_DELS" "$RESET$DIM" \
+    "$PR_FILES" "$RESET"
 echo ""
-printf "  %s%s%s\n" "$DIM" "$REVIEW_CONFIG_LINE" "$RESET"
+printf "  %s%s%s  %s%s%s  %s%s%s" \
+    "$CYAN" "${MODEL}$( [[ "$TEAMMATE_MODEL" != "$MODEL" ]] && printf " → %s" "$TEAMMATE_MODEL" )" "$RESET" \
+    "$BLUE" "${MAX_TURNS} turns" "$RESET" \
+    "$GREEN" "$AGENT_MODE" "$RESET"
+[[ "$SKIP_PERMISSIONS" == true ]] && printf "  %s%sautonomous%s" "$YELLOW" "$BOLD" "$RESET"
+[[ -n "$OUTPUT_FILE" ]] && printf "  %s→ %s%s" "$DIM" "$OUTPUT_FILE" "$RESET"
 echo ""
-_boxln "╚════════════════════════════════════════════════════════════╝"
+echo ""
+printf "  %s%s───────────────────────────────────────────────────────%s\n" "$BOLD" "$CYAN" "$RESET"
 echo ""
 
 _set_tab_title "PR #${PR_NUMBER} ⟳ reviewing..."
@@ -963,7 +1004,7 @@ fi
 if [[ "$_SINGLE_MODE" == true && -d "$WORKTREE_DIR" && "$CLEANUP" == false ]]; then
     # Write a tiny rcfile that gives the user quick commands
     _sq() { printf '%s' "$1" | sed "s/'/'\\\\''/g"; }
-    SHELL_RC=$(mktemp /tmp/pr-review-rc-XXXXXX)
+    SHELL_RC=$(mktemp /tmp/reviewer-rc-XXXXXX)
     cat > "$SHELL_RC" <<RCEOF
 # Load user's normal shell config
 [[ -f ~/.bashrc ]] && source ~/.bashrc 2>/dev/null
@@ -1012,13 +1053,15 @@ files() {
 
 # Welcome banner (compact — review already shown above)
 echo ""
-printf '\033[2m─────────────────────────────────────────────────\033[0m\n'
-printf '  \033[1mPR #$PR_NUMBER\033[0m worktree • Quick commands:\n'
-printf '    \033[1mreview\033[0m  — show the review again\n'
-printf '    \033[1mpdiff\033[0m   — view the PR diff\n'
-printf '    \033[1mfiles\033[0m   — PR metadata & file list\n'
-printf '    \033[1mexit\033[0m    — close this tab\n'
-printf '\033[2m─────────────────────────────────────────────────\033[0m\n'
+printf '  \033[1;36m───────────────────────────────────────────────\033[0m\n'
+printf '  \033[1;36m◆\033[0m \033[1mPR #$PR_NUMBER\033[0m worktree\n'
+echo ""
+printf '    \033[1;36mreview\033[0m   show the review again\n'
+printf '    \033[1;36mpdiff\033[0m    view the PR diff\n'
+printf '    \033[1;36mfiles\033[0m    PR metadata & file list\n'
+printf '    \033[1;36mexit\033[0m     close this tab\n'
+echo ""
+printf '  \033[1;36m───────────────────────────────────────────────\033[0m\n'
 echo ""
 RCEOF
     exec bash --rcfile "$SHELL_RC"
