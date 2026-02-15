@@ -687,7 +687,10 @@ if [[ "$COPY_ENV" == true ]]; then
 
     # Pass 1: pattern list
     for pattern in "${ALL_PATTERNS[@]}"; do
-        shopt -s nullglob; matches=( "$GIT_ROOT"/$pattern ); shopt -u nullglob
+        shopt -s nullglob
+        # shellcheck disable=SC2206
+        matches=( "$GIT_ROOT"/$pattern )
+        shopt -u nullglob
         for src_path in ${matches[@]+"${matches[@]}"}; do _try_copy "$src_path" "pattern"; done
     done
     # Pass 2: root .env*
